@@ -1,0 +1,14 @@
+services:
+  lyrebird:
+    build: .
+    image: ghcr.io/brienze1/lyrebird:latest
+    ports:
+      - "8080:8080" # data plane — never authed
+      - "9090:9090" # control plane — MCP + Admin REST + health
+    environment:
+      LYREBIRD_DEFAULT_SPACE: default
+    volumes:
+      - ./config:/config:ro
+      - lyrebird-data:/data
+volumes:
+  lyrebird-data:
