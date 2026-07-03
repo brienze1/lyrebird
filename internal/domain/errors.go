@@ -15,4 +15,9 @@ var (
 	// ErrDefaultPartitionProtected is returned when deletion of the default
 	// partition is attempted (FR-024: default cannot be deleted).
 	ErrDefaultPartitionProtected = errors.New("lyrebird: default partition cannot be deleted")
+
+	// ErrInvalidUpstream is returned when an Upstream fails basic validation
+	// (missing partition/match_host, or a target_url that isn't a valid
+	// absolute http(s) URL).
+	ErrInvalidUpstream = errors.New("lyrebird: invalid upstream")
 )

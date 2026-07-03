@@ -22,6 +22,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.TokenTTL.String() != "1h0m0s" {
 		t.Errorf("TokenTTL = %v, want 1h", cfg.TokenTTL)
 	}
+	if cfg.UpstreamTimeout.String() != "10s" {
+		t.Errorf("UpstreamTimeout = %v, want 10s", cfg.UpstreamTimeout)
+	}
 	if cfg.BodyCapBytes != 1<<20 {
 		t.Errorf("BodyCapBytes = %d, want %d", cfg.BodyCapBytes, 1<<20)
 	}

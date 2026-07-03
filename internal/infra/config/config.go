@@ -24,11 +24,12 @@ type Config struct {
 	TokenTTL         time.Duration
 	// DataKeyB64 is the raw, still-encoded LYREBIRD_DATA_KEY value, if any.
 	// Decoding into an actual key is internal/infra/crypto's job.
-	DataKeyB64   string
-	BodyCapBytes int64
-	DBPath       string
-	SeedDir      string
-	GCInterval   time.Duration
+	DataKeyB64      string
+	BodyCapBytes    int64
+	DBPath          string
+	SeedDir         string
+	GCInterval      time.Duration
+	UpstreamTimeout time.Duration
 }
 
 // Load reads and validates configuration from the environment. It fails fast
@@ -52,6 +53,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.GCInterval, err = parseDuration("LYREBIRD_GC_INTERVAL", "1m"); err != nil {
+		return Config{}, err
+	}
+	if cfg.UpstreamTimeout, err = parseDuration("LYREBIRD_UPSTREAM_TIMEOUT", "10s"); err != nil {
 		return Config{}, err
 	}
 	if cfg.BodyCapBytes, err = parsePositiveInt64("LYREBIRD_BODY_CAP_BYTES", 1<<20); err != nil {

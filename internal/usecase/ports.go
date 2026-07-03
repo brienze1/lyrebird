@@ -1,5 +1,5 @@
 // Package usecase defines the application's use cases and the repository
-// ports they depend on. At M0 only the port interfaces exist; concrete
+// ports they depend on. At M0 only the port interfaces existed; concrete
 // use-case implementations land starting at M1 (see specs/001-lyrebird/tasks.md).
 package usecase
 
@@ -22,53 +22,64 @@ type TrafficFilter struct {
 
 // MockRepo persists ephemeral mocks. Seeded mocks never pass through it —
 // they live only in memory (constitution Principle III).
+//
+// Method names are entity-qualified (CreateMock, not Create) rather than
+// bare, because a single concrete adapter (*store.Store) implements every
+// port interface in this file, and Go has no method overloading: two ports
+// both declaring a bare List/Get/Delete with different signatures cannot
+// both be satisfied by one receiver type. This was discovered as a real
+// compile-blocker while implementing M1's TrafficRepo/UpstreamRepo
+// alongside the pre-existing MockRepo/PartitionRepo, and fixed uniformly
+// across all four interfaces at once rather than one collision at a time.
 type MockRepo interface {
-	Create(ctx context.Context, m domain.Mock) error
-	Get(ctx context.Context, partition, id string) (domain.Mock, error)
-	List(ctx context.Context, partition string) ([]domain.Mock, error)
-	Update(ctx context.Context, m domain.Mock) error
-	Delete(ctx context.Context, partition, id string) error
-	DeleteByPartition(ctx context.Context, partition string) error
-	// PruneExpired removes ephemeral mocks whose TTL has elapsed as of now.
-	// Seeded mocks are never touched.
-	PruneExpired(ctx context.Context, now time.Time) (int, error)
+	CreateMock(ctx context.Context, m domain.Mock) error
+	GetMock(ctx context.Context, partition, id string) (domain.Mock, error)
+	ListMocks(ctx context.Context, partition string) ([]domain.Mock, error)
+	UpdateMock(ctx context.Context, m domain.Mock) error
+	DeleteMock(ctx context.Context, partition, id string) error
+	DeleteMocksByPartition(ctx context.Context, partition string) error
+	// PruneExpiredEphemeralMocks removes ephemeral mocks whose TTL has
+	// elapsed as of now. Seeded mocks are never touched. Named to match
+	// *store.Store's existing M0 method exactly (gc.Pruner already depends
+	// on that name) — zero rename needed on the store side.
+	PruneExpiredEphemeralMocks(ctx context.Context, now time.Time) (int, error)
 }
 
 // TrafficRepo persists the spy traffic log (FR-002), bounded by retention
 // (FR-027).
 type TrafficRepo interface {
-	Append(ctx context.Context, t domain.TrafficRecord) error
-	Get(ctx context.Context, partition, id string) (domain.TrafficRecord, error)
-	List(ctx context.Context, partition string, filter TrafficFilter) ([]domain.TrafficRecord, error)
-	Purge(ctx context.Context, olderThan time.Time) (int, error)
-	Clear(ctx context.Context, partition string) error
+	AppendTraffic(ctx context.Context, t domain.TrafficRecord) error
+	GetTraffic(ctx context.Context, partition, id string) (domain.TrafficRecord, error)
+	ListTraffic(ctx context.Context, partition string, filter TrafficFilter) ([]domain.TrafficRecord, error)
+	PruneTraffic(ctx context.Context, olderThan time.Time) (int, error)
+	ClearTraffic(ctx context.Context, partition string) error
 }
 
 // PartitionRepo manages spaces/partitions (FR-023).
 type PartitionRepo interface {
-	Create(ctx context.Context, p domain.Partition) error
-	Get(ctx context.Context, id string) (domain.Partition, error)
-	List(ctx context.Context) ([]domain.Partition, error)
-	// Delete cascades the partition's mocks/traffic/upstreams. Callers MUST
-	// reject domain.DefaultPartitionID before calling (FR-024); the repo
-	// itself does not special-case it.
-	Delete(ctx context.Context, id string) error
+	CreatePartition(ctx context.Context, p domain.Partition) error
+	GetPartition(ctx context.Context, id string) (domain.Partition, error)
+	ListPartitions(ctx context.Context) ([]domain.Partition, error)
+	// DeletePartition cascades the partition's mocks/traffic/upstreams.
+	// Callers MUST reject domain.DefaultPartitionID before calling
+	// (FR-024); the repo itself does not special-case it.
+	DeletePartition(ctx context.Context, id string) error
 }
 
 // UpstreamRepo manages the real targets spy passthrough forwards to (FR-003).
 type UpstreamRepo interface {
-	Set(ctx context.Context, u domain.Upstream) error
-	List(ctx context.Context, partition string) ([]domain.Upstream, error)
-	DeleteByPartition(ctx context.Context, partition string) error
+	SetUpstream(ctx context.Context, u domain.Upstream) error
+	ListUpstreams(ctx context.Context, partition string) ([]domain.Upstream, error)
+	DeleteUpstreamsByPartition(ctx context.Context, partition string) error
 }
 
 // ScenarioStateRepo tracks each mock's position through its Scenario
 // sequence, reset by a reset operation.
 type ScenarioStateRepo interface {
-	Index(ctx context.Context, partition, mockID string) (int, error)
-	Advance(ctx context.Context, partition, mockID string) (int, error)
-	Reset(ctx context.Context, partition, mockID string) error
-	ResetAll(ctx context.Context, partition string) error
+	ScenarioIndex(ctx context.Context, partition, mockID string) (int, error)
+	AdvanceScenario(ctx context.Context, partition, mockID string) (int, error)
+	ResetScenario(ctx context.Context, partition, mockID string) error
+	ResetAllScenarios(ctx context.Context, partition string) error
 }
 
 // Clock abstracts time.Now so tests can control it.

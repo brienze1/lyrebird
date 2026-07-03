@@ -16,11 +16,15 @@ import (
 
 	"github.com/brienze1/lyrebird/internal/adapters/httpadmin"
 	"github.com/brienze1/lyrebird/internal/adapters/httpmw"
+	"github.com/brienze1/lyrebird/internal/adapters/proxy"
+	"github.com/brienze1/lyrebird/internal/infra/clock"
 	"github.com/brienze1/lyrebird/internal/infra/config"
 	"github.com/brienze1/lyrebird/internal/infra/crypto"
 	"github.com/brienze1/lyrebird/internal/infra/gc"
+	"github.com/brienze1/lyrebird/internal/infra/idgen"
 	"github.com/brienze1/lyrebird/internal/infra/seeds"
 	"github.com/brienze1/lyrebird/internal/infra/store"
+	"github.com/brienze1/lyrebird/internal/usecase"
 )
 
 // App holds every long-lived resource a running Lyrebird instance owns.
@@ -76,16 +80,28 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	readiness := &httpadmin.Readiness{}
 	partitionMW := httpmw.Partition(cfg.DefaultSpace)
 
+	setUpstreamUC := usecase.NewSetUpstream(st)
+	listUpstreamsUC := usecase.NewListUpstreams(st)
+	recordTrafficUC := usecase.NewRecordTraffic(st, clock.System{}, idgen.UUID{})
+	listTrafficUC := usecase.NewListTraffic(st)
+	getTrafficUC := usecase.NewGetTraffic(st)
+
 	controlMux := http.NewServeMux()
 	controlMux.HandleFunc("GET /__lyrebird/healthz", httpadmin.Healthz)
 	controlMux.HandleFunc("GET /__lyrebird/readyz", httpadmin.Readyz(readiness))
+	controlMux.HandleFunc("GET /__lyrebird/upstreams", httpadmin.ListUpstreams(listUpstreamsUC))
+	controlMux.HandleFunc("POST /__lyrebird/upstreams", httpadmin.SetUpstream(setUpstreamUC))
+	controlMux.HandleFunc("GET /__lyrebird/traffic", httpadmin.ListTraffic(listTrafficUC))
+	controlMux.HandleFunc("GET /__lyrebird/traffic/{id}", httpadmin.GetTraffic(getTrafficUC))
 
+	// DecideMockOrProxy at M1: no MatchRequest use-case exists yet (M2,
+	// T028), so proxy.Handler unconditionally routes every request to spy
+	// passthrough. The data plane is intentionally never authenticated
+	// (FR-030).
+	proxyEngine := proxy.NewEngine(cfg.UpstreamTimeout)
+	dataHandler := proxy.NewHandler(listUpstreamsUC, recordTrafficUC, proxyEngine, cfg.BodyCapBytes, clock.System{}, log)
 	dataMux := http.NewServeMux()
-	dataMux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		// Placeholder until the proxy/mock engine lands (M1, T021). The data
-		// plane is intentionally never authenticated (FR-030).
-		w.WriteHeader(http.StatusNotImplemented)
-	})
+	dataMux.Handle("/", dataHandler)
 
 	var lc net.ListenConfig
 	dataLn, err := lc.Listen(ctx, "tcp", cfg.DataPlaneAddr)

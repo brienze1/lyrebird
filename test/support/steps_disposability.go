@@ -19,71 +19,76 @@ import (
 	"github.com/brienze1/lyrebird/internal/infra/store"
 )
 
-// disposabilityState carries fixtures and outcomes between steps within one
-// scenario. godog runs scenarios with a fresh instance each time.
-type disposabilityState struct {
+// appState carries the running app + fixtures shared by every feature that
+// needs a booted Lyrebird instance (disposability.feature, spy_record.feature,
+// ...). One instance is created per scenario by InitializeScenario and
+// passed to each feature's Register*Steps function, so "a fresh temporary
+// Lyrebird data directory" / "Lyrebird boots" are registered exactly once
+// regardless of how many feature files reuse that phrasing.
+type appState struct {
 	dataDir string
 	dbPath  string
 	seedDir string
+
+	// Optional pre-boot config overrides; zero value means "use the
+	// built-in test default" (set in bootWithDataKey). Must be set via a
+	// Given step BEFORE the "Lyrebird boots" step runs — config is baked in
+	// at boot time, there is no live reload.
+	upstreamTimeout time.Duration
+	bodyCapBytes    int64
 
 	app     *bootstrap.App
 	bootErr error
 }
 
-func (s *disposabilityState) aFreshTemporaryLyrebirdDataDirectory() error {
+func (s *appState) aFreshTemporaryLyrebirdDataDirectory() error {
 	s.dataDir = mustTempDir()
 	s.dbPath = filepath.Join(s.dataDir, "lyrebird.db")
 	s.seedDir = filepath.Join(s.dataDir, "config")
 	return os.MkdirAll(s.seedDir, 0o755)
 }
 
-func (s *disposabilityState) noDatabaseFileExistsAtTheConfiguredPath() error {
-	return nil // dbPath simply doesn't exist yet — nothing to do
-}
-
-func (s *disposabilityState) aCorruptedNonSQLiteFileExistsAtTheConfiguredPath() error {
-	return os.WriteFile(s.dbPath, []byte("this is not a valid sqlite database file, just garbage bytes"), 0o600)
-}
-
-func (s *disposabilityState) aDatabaseAtTheConfiguredPathContainsAnEphemeralMockInPartitionEncryptedWithDataKey(
-	ctx context.Context, mockName, partition, keyLabel string,
-) error {
-	sealer, err := crypto.New(keyForLabel(keyLabel))
-	if err != nil {
-		return err
-	}
-
-	st, err := store.Open(ctx, s.dbPath, sealer, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		return fmt.Errorf("fixture: open store: %w", err)
-	}
-	defer func() { _ = st.Close() }()
-
-	return st.InsertRawEphemeralMock(ctx, sealer, partition, mockName, mockName, []byte(`{"kind":"respond"}`))
-}
-
-func (s *disposabilityState) aSeedFileDeclaresAMockNamedInPartition(mockName, partition string) error {
-	content := fmt.Sprintf("space: %s\nmocks:\n  - name: %s\n", partition, mockName)
-	return os.WriteFile(filepath.Join(s.seedDir, "seed.yaml"), []byte(content), 0o600)
-}
-
-func (s *disposabilityState) lyrebirdBoots(ctx context.Context) error {
+func (s *appState) lyrebirdBoots(ctx context.Context) error {
 	return s.bootWithDataKey(ctx, "")
 }
 
-func (s *disposabilityState) lyrebirdBootsWithDataKey(ctx context.Context, keyLabel string) error {
+func (s *appState) lyrebirdBootsWithDataKey(ctx context.Context, keyLabel string) error {
 	b64 := base64.StdEncoding.EncodeToString(keyForLabel(keyLabel))
 	return s.bootWithDataKey(ctx, b64)
 }
 
-func (s *disposabilityState) bootWithDataKey(ctx context.Context, dataKeyB64 string) error {
+func (s *appState) upstreamTimeoutIsConfiguredTo(d string) error {
+	parsed, err := time.ParseDuration(d)
+	if err != nil {
+		return fmt.Errorf("parse upstream timeout %q: %w", d, err)
+	}
+	s.upstreamTimeout = parsed
+	return nil
+}
+
+func (s *appState) bodyCapIsConfiguredToBytes(n int64) error {
+	s.bodyCapBytes = n
+	return nil
+}
+
+func (s *appState) bootWithDataKey(ctx context.Context, dataKeyB64 string) error {
+	upstreamTimeout := s.upstreamTimeout
+	if upstreamTimeout == 0 {
+		upstreamTimeout = 10 * time.Second
+	}
+	bodyCapBytes := s.bodyCapBytes
+	if bodyCapBytes == 0 {
+		bodyCapBytes = 1 << 20
+	}
+
 	cfg := config.Config{
 		DataPlaneAddr:    "127.0.0.1:0",
 		ControlPlaneAddr: "127.0.0.1:0",
 		DefaultSpace:     "default",
 		TrafficTTL:       time.Hour,
 		TokenTTL:         time.Hour,
-		BodyCapBytes:     1 << 20,
+		BodyCapBytes:     bodyCapBytes,
+		UpstreamTimeout:  upstreamTimeout,
 		DBPath:           s.dbPath,
 		SeedDir:          s.seedDir,
 		GCInterval:       time.Hour, // scenario doesn't need GC to actually fire
@@ -96,7 +101,7 @@ func (s *disposabilityState) bootWithDataKey(ctx context.Context, dataKeyB64 str
 	return nil // the outcome is asserted by a later step, not here
 }
 
-func (s *disposabilityState) bootSucceeds() error {
+func (s *appState) bootSucceeds() error {
 	if s.bootErr != nil {
 		return fmt.Errorf("expected boot to succeed, got error: %w", s.bootErr)
 	}
@@ -106,7 +111,7 @@ func (s *disposabilityState) bootSucceeds() error {
 	return nil
 }
 
-func (s *disposabilityState) theControlPlaneReportsReady(ctx context.Context) error {
+func (s *appState) theControlPlaneReportsReady(ctx context.Context) error {
 	url := fmt.Sprintf("http://%s/__lyrebird/readyz", s.app.ControlAddr())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -123,8 +128,68 @@ func (s *disposabilityState) theControlPlaneReportsReady(ctx context.Context) er
 	return nil
 }
 
-func (s *disposabilityState) listingEphemeralMocksForPartitionReturnsZeroResults(ctx context.Context, partition string) error {
-	ids, err := s.app.Store.ListEphemeralMockIDs(ctx, partition)
+// RegisterCoreAppSteps wires the app-lifecycle steps shared by every
+// feature that boots Lyrebird: fresh temp dir, boot (with/without a data
+// key), boot-succeeds, and readiness. Also owns the after-scenario cleanup
+// (shutdown + temp dir removal), since that's lifecycle, not
+// disposability-specific behavior.
+func RegisterCoreAppSteps(sc *godog.ScenarioContext, s *appState) {
+	sc.Step(`^a fresh temporary Lyrebird data directory$`, s.aFreshTemporaryLyrebirdDataDirectory)
+	sc.Step(`^the upstream timeout is configured to "([^"]*)"$`, s.upstreamTimeoutIsConfiguredTo)
+	sc.Step(`^the body cap is configured to "(\d+)" bytes$`, s.bodyCapIsConfiguredToBytes)
+	sc.Step(`^Lyrebird boots$`, s.lyrebirdBoots)
+	sc.Step(`^Lyrebird boots with data key "([^"]*)"$`, s.lyrebirdBootsWithDataKey)
+	sc.Step(`^boot succeeds$`, s.bootSucceeds)
+	sc.Step(`^the control plane reports ready$`, s.theControlPlaneReportsReady)
+
+	sc.After(func(ctx context.Context, _ *godog.Scenario, _ error) (context.Context, error) {
+		if s.app != nil {
+			_ = s.app.Shutdown(ctx)
+		}
+		if s.dataDir != "" {
+			_ = os.RemoveAll(s.dataDir)
+		}
+		return ctx, nil
+	})
+}
+
+// disposabilityFixtures holds disposability.feature's own fixture steps —
+// separate from appState so RegisterDisposabilitySteps only needs a
+// reference to the shared appState, not ownership of it.
+type disposabilityFixtures struct{ s *appState }
+
+func (f *disposabilityFixtures) noDatabaseFileExistsAtTheConfiguredPath() error {
+	return nil // dbPath simply doesn't exist yet — nothing to do
+}
+
+func (f *disposabilityFixtures) aCorruptedNonSQLiteFileExistsAtTheConfiguredPath() error {
+	return os.WriteFile(f.s.dbPath, []byte("this is not a valid sqlite database file, just garbage bytes"), 0o600)
+}
+
+func (f *disposabilityFixtures) aDatabaseAtTheConfiguredPathContainsAnEphemeralMockInPartitionEncryptedWithDataKey(
+	ctx context.Context, mockName, partition, keyLabel string,
+) error {
+	sealer, err := crypto.New(keyForLabel(keyLabel))
+	if err != nil {
+		return err
+	}
+
+	st, err := store.Open(ctx, f.s.dbPath, sealer, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		return fmt.Errorf("fixture: open store: %w", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	return st.InsertRawEphemeralMock(ctx, sealer, partition, mockName, mockName, []byte(`{"kind":"respond"}`))
+}
+
+func (f *disposabilityFixtures) aSeedFileDeclaresAMockNamedInPartition(mockName, partition string) error {
+	content := fmt.Sprintf("space: %s\nmocks:\n  - name: %s\n", partition, mockName)
+	return os.WriteFile(filepath.Join(f.s.seedDir, "seed.yaml"), []byte(content), 0o600)
+}
+
+func (f *disposabilityFixtures) listingEphemeralMocksForPartitionReturnsZeroResults(ctx context.Context, partition string) error {
+	ids, err := f.s.app.Store.ListEphemeralMockIDs(ctx, partition)
 	if err != nil {
 		return fmt.Errorf("expected zero results (row treated as absent), got error: %w", err)
 	}
@@ -134,13 +199,13 @@ func (s *disposabilityState) listingEphemeralMocksForPartitionReturnsZeroResults
 	return nil
 }
 
-func (s *disposabilityState) theSeededMockIsPresentInPartition(mockName, partition string) error {
-	for _, m := range s.app.Seeds.Mocks {
+func (f *disposabilityFixtures) theSeededMockIsPresentInPartition(mockName, partition string) error {
+	for _, m := range f.s.app.Seeds.Mocks {
 		if m.Name == mockName && m.Partition == partition {
 			return nil
 		}
 	}
-	return fmt.Errorf("seeded mock %q not found in partition %q (loaded: %+v)", mockName, partition, s.app.Seeds.Mocks)
+	return fmt.Errorf("seeded mock %q not found in partition %q (loaded: %+v)", mockName, partition, f.s.app.Seeds.Mocks)
 }
 
 // keyForLabel maps a human-readable Gherkin label ("keyA"/"keyB") to a
@@ -152,37 +217,24 @@ func keyForLabel(label string) []byte {
 }
 
 func mustTempDir() string {
-	dir, err := os.MkdirTemp("", "lyrebird-disposability-*")
+	dir, err := os.MkdirTemp("", "lyrebird-bdd-*")
 	if err != nil {
 		panic(err)
 	}
 	return dir
 }
 
-// RegisterDisposabilitySteps wires disposability.feature's steps into ctx.
-func RegisterDisposabilitySteps(sc *godog.ScenarioContext) {
-	s := &disposabilityState{}
+// RegisterDisposabilitySteps wires disposability.feature's own steps
+// against the shared appState s (created by InitializeScenario, wired to
+// RegisterCoreAppSteps for the app-lifecycle steps this feature also uses).
+func RegisterDisposabilitySteps(sc *godog.ScenarioContext, s *appState) {
+	f := &disposabilityFixtures{s: s}
 
-	sc.Step(`^a fresh temporary Lyrebird data directory$`, s.aFreshTemporaryLyrebirdDataDirectory)
-	sc.Step(`^no database file exists at the configured path$`, s.noDatabaseFileExistsAtTheConfiguredPath)
-	sc.Step(`^a corrupted \(non-SQLite\) file exists at the configured path$`, s.aCorruptedNonSQLiteFileExistsAtTheConfiguredPath)
+	sc.Step(`^no database file exists at the configured path$`, f.noDatabaseFileExistsAtTheConfiguredPath)
+	sc.Step(`^a corrupted \(non-SQLite\) file exists at the configured path$`, f.aCorruptedNonSQLiteFileExistsAtTheConfiguredPath)
 	sc.Step(`^a database at the configured path contains an ephemeral mock "([^"]*)" in partition "([^"]*)" encrypted with data key "([^"]*)"$`,
-		s.aDatabaseAtTheConfiguredPathContainsAnEphemeralMockInPartitionEncryptedWithDataKey)
-	sc.Step(`^a seed file declares a mock named "([^"]*)" in partition "([^"]*)"$`, s.aSeedFileDeclaresAMockNamedInPartition)
-	sc.Step(`^Lyrebird boots$`, s.lyrebirdBoots)
-	sc.Step(`^Lyrebird boots with data key "([^"]*)"$`, s.lyrebirdBootsWithDataKey)
-	sc.Step(`^boot succeeds$`, s.bootSucceeds)
-	sc.Step(`^the control plane reports ready$`, s.theControlPlaneReportsReady)
-	sc.Step(`^listing ephemeral mocks for partition "([^"]*)" returns zero results$`, s.listingEphemeralMocksForPartitionReturnsZeroResults)
-	sc.Step(`^the seeded mock "([^"]*)" is present in partition "([^"]*)"$`, s.theSeededMockIsPresentInPartition)
-
-	sc.After(func(ctx context.Context, _ *godog.Scenario, _ error) (context.Context, error) {
-		if s.app != nil {
-			_ = s.app.Shutdown(ctx)
-		}
-		if s.dataDir != "" {
-			_ = os.RemoveAll(s.dataDir)
-		}
-		return ctx, nil
-	})
+		f.aDatabaseAtTheConfiguredPathContainsAnEphemeralMockInPartitionEncryptedWithDataKey)
+	sc.Step(`^a seed file declares a mock named "([^"]*)" in partition "([^"]*)"$`, f.aSeedFileDeclaresAMockNamedInPartition)
+	sc.Step(`^listing ephemeral mocks for partition "([^"]*)" returns zero results$`, f.listingEphemeralMocksForPartitionReturnsZeroResults)
+	sc.Step(`^the seeded mock "([^"]*)" is present in partition "([^"]*)"$`, f.theSeededMockIsPresentInPartition)
 }

@@ -24,8 +24,14 @@ func TestFeatures(t *testing.T) {
 	}
 }
 
-// InitializeScenario registers every feature's step definitions. Each story
-// adds its own Register*Steps call here as it lands.
+// InitializeScenario registers every feature's step definitions against one
+// shared appState per scenario, so features that all need a running
+// Lyrebird instance (disposability.feature, spy_record.feature, ...) share
+// one "Lyrebird boots" step rather than each registering their own
+// (godog would treat duplicate patterns as an ambiguous match).
 func InitializeScenario(ctx *godog.ScenarioContext) {
-	RegisterDisposabilitySteps(ctx)
+	s := &appState{}
+	RegisterCoreAppSteps(ctx, s)
+	RegisterDisposabilitySteps(ctx, s)
+	RegisterSpySteps(ctx, s)
 }
