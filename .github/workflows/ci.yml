@@ -23,7 +23,10 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          # Pinned explicitly: golangci-lint-action@v6's "latest" resolved to
+          # a stale v1 binary (built with Go 1.24), which can neither run
+          # against our go 1.26 target nor parse .golangci.yml's v2 schema.
+          version: v2.12.2
 
       - name: gofmt check
         run: |
