@@ -20,4 +20,15 @@ var (
 	// (missing partition/match_host, or a target_url that isn't a valid
 	// absolute http(s) URL).
 	ErrInvalidUpstream = errors.New("lyrebird: invalid upstream")
+
+	// ErrInvalidMock is returned when a Mock fails basic validation (missing
+	// name, an action whose Kind doesn't match its populated variant, or a
+	// Match condition that fails MatchEval.ValidateMatch, e.g. a bad regex).
+	ErrInvalidMock = errors.New("lyrebird: invalid mock")
+
+	// ErrSeededMockImmutable is returned when an update or delete targets a
+	// seeded mock. Seeded mocks are protected config, not runtime state
+	// (constitution Principle III, FR-025) — the rejection is explicit
+	// rather than a silent no-op or a bare ErrNotFound.
+	ErrSeededMockImmutable = errors.New("lyrebird: seeded mock cannot be modified or deleted")
 )

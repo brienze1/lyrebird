@@ -88,7 +88,7 @@ func (t *spyState) anUpstreamConfiguredInPartitionPointingAtAClosedPort(ctx cont
 	})
 }
 
-func (t *spyState) sendRequest(ctx context.Context, method, path, host, partition string, body []byte) error {
+func (t *spyState) sendRequest(ctx context.Context, method, path, host, partition string, body []byte, headers map[string]string) error {
 	url := fmt.Sprintf("http://%s%s", t.s.app.DataAddr(), path)
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 	if err != nil {
@@ -100,6 +100,9 @@ func (t *spyState) sendRequest(ctx context.Context, method, path, host, partitio
 		t.lastPartition = partition
 	} else {
 		t.lastPartition = "default"
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 
 	client := &http.Client{Timeout: 5 * time.Second} // client-side bound so a Lyrebird-side hang fails the test fast, not after go test's own suite timeout
@@ -118,15 +121,37 @@ func (t *spyState) sendRequest(ctx context.Context, method, path, host, partitio
 }
 
 func (t *spyState) iSendAGETRequestToOnTheDataPlaneWithHost(ctx context.Context, path, host string) error {
-	return t.sendRequest(ctx, http.MethodGet, path, host, "", nil)
+	return t.sendRequest(ctx, http.MethodGet, path, host, "", nil, nil)
 }
 
 func (t *spyState) iSendAGETRequestToOnTheDataPlaneWithHostInPartition(ctx context.Context, path, host, partition string) error {
-	return t.sendRequest(ctx, http.MethodGet, path, host, partition, nil)
+	return t.sendRequest(ctx, http.MethodGet, path, host, partition, nil, nil)
 }
 
 func (t *spyState) iSendAPOSTRequestToOnTheDataPlaneWithHostAndABodyOfBytes(ctx context.Context, path, host string, n int) error {
-	return t.sendRequest(ctx, http.MethodPost, path, host, "", bytes.Repeat([]byte("x"), n))
+	return t.sendRequest(ctx, http.MethodPost, path, host, "", bytes.Repeat([]byte("x"), n), nil)
+}
+
+func (t *spyState) iSendAGETRequestToOnTheDataPlaneWithHostAndHeader(ctx context.Context, path, host, headerLine string) error {
+	name, value, ok := strings.Cut(headerLine, ":")
+	if !ok {
+		return fmt.Errorf("malformed header %q, want \"Name: value\"", headerLine)
+	}
+	headers := map[string]string{strings.TrimSpace(name): strings.TrimSpace(value)}
+	return t.sendRequest(ctx, http.MethodGet, path, host, "", nil, headers)
+}
+
+func (t *spyState) iSendAPOSTRequestToOnTheDataPlaneWithHostAndJSONBody(ctx context.Context, path, host, jsonBody string) error {
+	headers := map[string]string{"Content-Type": "application/json"}
+	return t.sendRequest(ctx, http.MethodPost, path, host, "", []byte(jsonBody), headers)
+}
+
+func (t *spyState) theFakeUpstreamReceivedRequests(want int) error {
+	got := t.lastFakeUpstream.RequestCount()
+	if got != want {
+		return fmt.Errorf("fake upstream received %d requests, want %d", got, want)
+	}
+	return nil
 }
 
 func (t *spyState) theResponseStatusIs(want int) error {
@@ -264,6 +289,11 @@ func RegisterSpySteps(sc *godog.ScenarioContext, s *appState) {
 		t.iSendAGETRequestToOnTheDataPlaneWithHostInPartition)
 	sc.Step(`^I send a POST request to "([^"]*)" on the data plane with host "([^"]*)" and a body of (\d+) bytes$`,
 		t.iSendAPOSTRequestToOnTheDataPlaneWithHostAndABodyOfBytes)
+	sc.Step(`^I send a GET request to "([^"]*)" on the data plane with host "([^"]*)" and header "([^"]*)"$`,
+		t.iSendAGETRequestToOnTheDataPlaneWithHostAndHeader)
+	sc.Step(`^I send a POST request to "([^"]*)" on the data plane with host "([^"]*)" and JSON body '(.*)'$`,
+		t.iSendAPOSTRequestToOnTheDataPlaneWithHostAndJSONBody)
+	sc.Step(`^the fake upstream received (\d+) requests?$`, t.theFakeUpstreamReceivedRequests)
 
 	sc.Step(`^the response status is (\d+)$`, t.theResponseStatusIs)
 	sc.Step(`^the response body is "([^"]*)"$`, t.theResponseBodyIs)

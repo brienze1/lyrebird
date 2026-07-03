@@ -20,6 +20,7 @@ type FakeUpstream struct {
 	hang            time.Duration
 	echo            bool
 	lastReceivedLen int
+	requestCount    int
 }
 
 // NewFakeUpstream starts a fake upstream responding 200 with an empty body
@@ -71,8 +72,18 @@ func (f *FakeUpstream) LastReceivedBodyLen() int {
 	return f.lastReceivedLen
 }
 
+// RequestCount returns how many requests this fake upstream has received so
+// far — used to assert a matching mock short-circuits before ever reaching
+// the upstream (SC-003).
+func (f *FakeUpstream) RequestCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.requestCount
+}
+
 func (f *FakeUpstream) handle(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
+	f.requestCount++
 	hang, echo, status, body, headers := f.hang, f.echo, f.status, f.body, f.headers
 	f.mu.Unlock()
 

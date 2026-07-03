@@ -184,7 +184,10 @@ func (f *disposabilityFixtures) aDatabaseAtTheConfiguredPathContainsAnEphemeralM
 }
 
 func (f *disposabilityFixtures) aSeedFileDeclaresAMockNamedInPartition(mockName, partition string) error {
-	content := fmt.Sprintf("space: %s\nmocks:\n  - name: %s\n", partition, mockName)
+	content := fmt.Sprintf(
+		"space: %s\nmocks:\n  - name: %s\n    match: {}\n    action:\n      respond:\n        status: 200\n        body: \"ok\"\n",
+		partition, mockName,
+	)
 	return os.WriteFile(filepath.Join(f.s.seedDir, "seed.yaml"), []byte(content), 0o600)
 }
 

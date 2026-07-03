@@ -16,7 +16,9 @@ import (
 
 	"github.com/brienze1/lyrebird/internal/adapters/httpadmin"
 	"github.com/brienze1/lyrebird/internal/adapters/httpmw"
+	"github.com/brienze1/lyrebird/internal/adapters/matcher"
 	"github.com/brienze1/lyrebird/internal/adapters/proxy"
+	"github.com/brienze1/lyrebird/internal/adapters/template"
 	"github.com/brienze1/lyrebird/internal/infra/clock"
 	"github.com/brienze1/lyrebird/internal/infra/config"
 	"github.com/brienze1/lyrebird/internal/infra/crypto"
@@ -86,6 +88,12 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	listTrafficUC := usecase.NewListTraffic(st)
 	getTrafficUC := usecase.NewGetTraffic(st)
 
+	matchEval := matcher.New()
+	templater := template.New()
+	matchRequestUC := usecase.NewMatchRequest(st, sd, matchEval)
+	matchTestUC := usecase.NewMatchTest(st, sd, matchEval, templater)
+	mockCRUDUC := usecase.NewMockCRUD(st, sd, matchEval, idgen.UUID{}, clock.System{})
+
 	controlMux := http.NewServeMux()
 	controlMux.HandleFunc("GET /__lyrebird/healthz", httpadmin.Healthz)
 	controlMux.HandleFunc("GET /__lyrebird/readyz", httpadmin.Readyz(readiness))
@@ -93,13 +101,19 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	controlMux.HandleFunc("POST /__lyrebird/upstreams", httpadmin.SetUpstream(setUpstreamUC))
 	controlMux.HandleFunc("GET /__lyrebird/traffic", httpadmin.ListTraffic(listTrafficUC))
 	controlMux.HandleFunc("GET /__lyrebird/traffic/{id}", httpadmin.GetTraffic(getTrafficUC))
+	controlMux.HandleFunc("GET /__lyrebird/mocks", httpadmin.ListMocks(mockCRUDUC))
+	controlMux.HandleFunc("POST /__lyrebird/mocks", httpadmin.CreateMock(mockCRUDUC))
+	controlMux.HandleFunc("GET /__lyrebird/mocks/{id}", httpadmin.GetMock(mockCRUDUC))
+	controlMux.HandleFunc("PUT /__lyrebird/mocks/{id}", httpadmin.UpdateMock(mockCRUDUC))
+	controlMux.HandleFunc("DELETE /__lyrebird/mocks/{id}", httpadmin.DeleteMock(mockCRUDUC))
+	controlMux.HandleFunc("POST /__lyrebird/match-test", httpadmin.MatchTest(matchTestUC))
 
-	// DecideMockOrProxy at M1: no MatchRequest use-case exists yet (M2,
-	// T028), so proxy.Handler unconditionally routes every request to spy
-	// passthrough. The data plane is intentionally never authenticated
-	// (FR-030).
+	// The data plane is intentionally never authenticated (FR-030).
 	proxyEngine := proxy.NewEngine(cfg.UpstreamTimeout)
-	dataHandler := proxy.NewHandler(listUpstreamsUC, recordTrafficUC, proxyEngine, cfg.BodyCapBytes, clock.System{}, log)
+	dataHandler := proxy.NewHandler(
+		listUpstreamsUC, recordTrafficUC, matchRequestUC, templater,
+		proxyEngine, cfg.BodyCapBytes, clock.System{}, log,
+	)
 	dataMux := http.NewServeMux()
 	dataMux.Handle("/", dataHandler)
 

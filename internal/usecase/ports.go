@@ -87,3 +87,58 @@ type Clock interface{ Now() time.Time }
 
 // IDGen abstracts id generation so tests can control it.
 type IDGen interface{ NewID() string }
+
+// MatchInput is the plain-data view of an inbound request that MatchEval and
+// Templater operate on. Deliberately not net/http (map[string][]string
+// instead of http.Header) so usecase stays free of adapter/stdlib-net
+// dependencies, matching the RecordedMessage convention already established
+// in M1.
+type MatchInput struct {
+	Method string
+	Path   string
+	Header map[string][]string
+	Query  map[string][]string
+	Body   []byte
+}
+
+// ConditionResult reports one evaluated match condition's outcome. Used by
+// both the live request-matching hot path (only the aggregate bool is
+// consulted) and MatchTest's full per-condition dry-run detail (FR-011).
+type ConditionResult struct {
+	Field    string
+	Expected string
+	Actual   string
+	Passed   bool
+}
+
+// MatchEval evaluates a domain.Match against a MatchInput. It is a port
+// (rather than being called directly from an adapter) because
+// internal/usecase cannot import internal/adapters/* (Clean Architecture's
+// inward-only dependency rule) while still needing declarative matching
+// logic; the concrete implementation lives in internal/adapters/matcher.
+type MatchEval interface {
+	// Matches reports whether every condition in m holds against in, plus
+	// the per-condition detail.
+	Matches(m domain.Match, in MatchInput) (bool, []ConditionResult)
+	// ValidateMatch checks m is well-formed (e.g. every regex compiles)
+	// without evaluating it against a request. Called at mock create/update
+	// time so a bad pattern is rejected at write time, not at first-match
+	// time.
+	ValidateMatch(m domain.Match) error
+}
+
+// Templater renders {{...}} placeholders in a RespondAction's body/headers
+// against a MatchInput, when RespondAction.Template is true. A port for the
+// same reason as MatchEval; implemented by internal/adapters/template.
+type Templater interface {
+	Render(body []byte, in MatchInput) []byte
+	RenderHeaders(headers map[string]string, in MatchInput) map[string]string
+}
+
+// SeededMockSource returns the seeded (in-memory, TTL/reset-immune) mocks
+// for a partition. Implemented directly by seeds.Seeds — never by MockRepo,
+// since seeded content never touches the disposable store (constitution
+// Principle III).
+type SeededMockSource interface {
+	SeededMocks(partition string) []domain.Mock
+}
