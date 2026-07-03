@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -26,14 +27,25 @@ type trafficRecorder interface {
 	Execute(ctx context.Context, in usecase.RecordTrafficInput) (domain.TrafficRecord, error)
 }
 
-// Handler is Lyrebird's data-plane entry point — DecideMockOrProxy at M1:
-// no MatchRequest use-case exists yet (M2, T028), so every request falls
-// through to spy passthrough unconditionally. M2 will insert a mock-match
-// check ahead of the ResolveUpstream call below, short-circuiting to a
-// mocked response when a mock matches.
+// mockMatcher is the subset of *usecase.MatchRequest's behavior Handler
+// depends on.
+type mockMatcher interface {
+	Execute(ctx context.Context, partition string, in usecase.MatchInput) (domain.Mock, bool, error)
+}
+
+// Handler is Lyrebird's data-plane entry point (T029): a mock-match check
+// (US2) runs ahead of spy passthrough (US1). A matched action=respond mock
+// is built and written directly — h.upstreams.Execute and h.engine.Forward
+// are never called for that request, which is what makes SC-003 (zero
+// upstream calls on a mock hit) true structurally, not just by test
+// observation. A matched action=fault mock injects a chaos failure. Every
+// other case (action=proxy, or no match at all) falls through to the
+// unmodified M1 spy passthrough path below.
 type Handler struct {
 	upstreams    upstreamLister
 	record       trafficRecorder
+	matchReq     mockMatcher
+	tpl          usecase.Templater
 	engine       *Engine
 	bodyCapBytes int64
 	clock        usecase.Clock
@@ -41,20 +53,53 @@ type Handler struct {
 }
 
 // NewHandler builds the data-plane Handler.
-func NewHandler(upstreams upstreamLister, record trafficRecorder, engine *Engine, bodyCapBytes int64, clock usecase.Clock, log *slog.Logger) *Handler {
+func NewHandler(
+	upstreams upstreamLister, record trafficRecorder, matchReq mockMatcher, tpl usecase.Templater,
+	engine *Engine, bodyCapBytes int64, clock usecase.Clock, log *slog.Logger,
+) *Handler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Handler{upstreams: upstreams, record: record, engine: engine, bodyCapBytes: bodyCapBytes, clock: clock, log: log}
+	return &Handler{
+		upstreams: upstreams, record: record, matchReq: matchReq, tpl: tpl,
+		engine: engine, bodyCapBytes: bodyCapBytes, clock: clock, log: log,
+	}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := h.clock.Now()
 	partition := httpmw.PartitionFromContext(r.Context())
 
+	peeked, body, err := peekBody(r.Body, h.bodyCapBytes)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	r.Body = body
+
 	reqBody, reqCapture := newCappedTee(r.Body, h.bodyCapBytes)
 	r.Body = reqBody
 	reqHeaders := map[string][]string(r.Header.Clone())
+
+	in := usecase.MatchInput{
+		Method: r.Method, Path: r.URL.Path,
+		Header: map[string][]string(r.Header), Query: map[string][]string(r.URL.Query()),
+		Body: peeked,
+	}
+
+	mock, matched, err := h.matchReq.Execute(r.Context(), partition, in)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if matched && mock.Action.Kind == domain.ActionRespond && mock.Action.Respond != nil {
+		h.serveMocked(w, r, partition, start, reqHeaders, reqBody, reqCapture, mock, in)
+		return
+	}
+	if matched && mock.Action.Kind == domain.ActionFault && mock.Action.Fault != nil {
+		h.serveFaulted(w, r, partition, start, reqHeaders, reqBody, reqCapture, mock)
+		return
+	}
 
 	upstreams, err := h.upstreams.Execute(r.Context(), partition)
 	if err != nil {
@@ -72,8 +117,56 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	reqStoredBody, reqTrunc, reqTotal := reqCapture.Result()
 
 	h.recordAsync(r.Context(), partition, r, start,
-		reqHeaders, reqStoredBody, reqTrunc, reqTotal,
+		reqHeaders, reqStoredBody, reqTrunc, reqTotal, nil,
 		domain.DecisionProxied, rec.Status, rec.Headers, rec.Body, rec.BodyTruncated, rec.BodyTotalSize)
+}
+
+// serveMocked writes a matched action=respond mock's response directly and
+// records it — no upstream is ever contacted for this request.
+func (h *Handler) serveMocked(
+	w http.ResponseWriter, r *http.Request, partition string, start time.Time,
+	reqHeaders map[string][]string, reqBody io.Reader, reqCapture *cappedCapture,
+	mock domain.Mock, in usecase.MatchInput,
+) {
+	// Nothing downstream will read the rest of the body — drain only up to
+	// one byte past the cap, same discipline as serveNotConfigured.
+	_, _ = io.CopyN(io.Discard, reqBody, h.bodyCapBytes+1)
+	reqStoredBody, reqTrunc, reqTotal := reqCapture.Result()
+
+	status, headers, respBody := usecase.BuildRespondOutput(*mock.Action.Respond, in, h.tpl)
+	for k, v := range headers {
+		w.Header().Set(k, v)
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write(respBody)
+
+	respHeaders := make(map[string][]string, len(headers))
+	for k, v := range headers {
+		respHeaders[k] = []string{v}
+	}
+
+	mockID := mock.ID
+	h.recordAsync(r.Context(), partition, r, start,
+		reqHeaders, reqStoredBody, reqTrunc, reqTotal, &mockID,
+		domain.DecisionMocked, status, respHeaders, respBody, false, int64(len(respBody)))
+}
+
+// serveFaulted injects a matched action=fault mock's chaos failure and
+// records it.
+func (h *Handler) serveFaulted(
+	w http.ResponseWriter, r *http.Request, partition string, start time.Time,
+	reqHeaders map[string][]string, reqBody io.Reader, reqCapture *cappedCapture,
+	mock domain.Mock,
+) {
+	_, _ = io.CopyN(io.Discard, reqBody, h.bodyCapBytes+1)
+	reqStoredBody, reqTrunc, reqTotal := reqCapture.Result()
+
+	status := serveFault(w, r, *mock.Action.Fault)
+
+	mockID := mock.ID
+	h.recordAsync(r.Context(), partition, r, start,
+		reqHeaders, reqStoredBody, reqTrunc, reqTotal, &mockID,
+		domain.DecisionFaulted, status, nil, nil, false, 0)
 }
 
 func (h *Handler) serveNotConfigured(
@@ -100,20 +193,20 @@ func (h *Handler) serveNotConfigured(
 	_, _ = w.Write(respBody)
 
 	h.recordAsync(r.Context(), partition, r, start,
-		reqHeaders, reqStoredBody, reqTrunc, reqTotal,
+		reqHeaders, reqStoredBody, reqTrunc, reqTotal, nil,
 		domain.DecisionNotConfigured, http.StatusNotFound,
 		map[string][]string{"Content-Type": {"application/json"}}, respBody, false, int64(len(respBody)))
 }
 
 func (h *Handler) recordAsync(
 	ctx context.Context, partition string, r *http.Request, start time.Time,
-	reqHeaders map[string][]string, reqBody []byte, reqTrunc bool, reqTotal int64,
+	reqHeaders map[string][]string, reqBody []byte, reqTrunc bool, reqTotal int64, matchedMockID *string,
 	decision domain.Decision, status int, respHeaders map[string][]string, respBody []byte, respTrunc bool, respTotal int64,
 ) {
 	_, err := h.record.Execute(ctx, usecase.RecordTrafficInput{
 		Partition: partition, Method: r.Method, Host: r.Host, Path: r.URL.Path,
 		RequestHeaders: reqHeaders, RequestBody: reqBody, RequestBodyTruncated: reqTrunc, RequestBodyTotalSize: reqTotal,
-		Decision:        decision,
+		Decision: decision, MatchedMockID: matchedMockID,
 		ResponseHeaders: respHeaders, ResponseBody: respBody, ResponseBodyTruncated: respTrunc, ResponseBodyTotalSize: respTotal,
 		Status: status, LatencyMS: int(h.clock.Now().Sub(start).Milliseconds()),
 	})
@@ -123,4 +216,24 @@ func (h *Handler) recordAsync(
 		// III); corrupting a live response is not.
 		h.log.Warn("proxy: record traffic failed", "err", err)
 	}
+}
+
+// peekBody reads up to capBytes of body into memory for mock-matching, then
+// returns a ReadCloser that replays those bytes followed by the rest of the
+// original stream — so every downstream consumer (the capped-tee, then
+// either a mocked response or ReverseProxy) sees an untouched, unbounded
+// stream. This resolves the tension between mock-matching (needs bytes now)
+// and proxy passthrough (needs to stream arbitrarily large bodies without
+// buffering them in full).
+func peekBody(body io.ReadCloser, capBytes int64) ([]byte, io.ReadCloser, error) {
+	peeked, err := io.ReadAll(io.LimitReader(body, capBytes))
+	if err != nil {
+		return nil, nil, fmt.Errorf("proxy: peek body: %w", err)
+	}
+	return peeked, readCloser{Reader: io.MultiReader(bytes.NewReader(peeked), body), Closer: body}, nil
+}
+
+type readCloser struct {
+	io.Reader
+	io.Closer
 }

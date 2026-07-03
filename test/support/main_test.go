@@ -34,4 +34,5 @@ func InitializeScenario(ctx *godog.ScenarioContext) {
 	RegisterCoreAppSteps(ctx, s)
 	RegisterDisposabilitySteps(ctx, s)
 	RegisterSpySteps(ctx, s)
+	RegisterMockSteps(ctx, s)
 }

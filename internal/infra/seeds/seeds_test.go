@@ -26,6 +26,11 @@ func TestLoadMissingDirReturnsEmptySeeds(t *testing.T) {
 	}
 }
 
+// minimalAction is a valid action block (contracts/seed-config.md requires
+// exactly one of respond/proxy/fault per mock) reused by fixtures that only
+// care about name/priority/partition, not response content.
+const minimalAction = "    action:\n      respond:\n        status: 200\n        body: \"ok\"\n"
+
 func TestLoadParsesMocksAndUpstreams(t *testing.T) {
 	dir := t.TempDir()
 	writeSeedFile(t, dir, "payments.yaml", `
@@ -36,6 +41,17 @@ upstreams:
 mocks:
   - name: charge-declined
     priority: 100
+    match:
+      method: POST
+      path: /v1/charges
+      body:
+        - jsonpath: amount
+          equals: "666"
+    action:
+      respond:
+        status: 402
+        headers: { Content-Type: application/json }
+        body: '{"error":{"code":"card_declined"}}'
 `)
 
 	s, err := Load(dir)
@@ -49,8 +65,20 @@ mocks:
 	if m.Partition != "payments-team" || m.Name != "charge-declined" || m.Priority != 100 {
 		t.Errorf("Mock = %+v, unexpected", m)
 	}
+	if m.ID != "charge-declined" {
+		t.Errorf("ID = %q, want %q (just the name, not \"partition/name\" — Go's ServeMux {id} wildcard can't match a \"/\")", m.ID, "charge-declined")
+	}
 	if m.Lifetime != domain.LifetimeSeeded {
 		t.Errorf("Lifetime = %q, want %q", m.Lifetime, domain.LifetimeSeeded)
+	}
+	if m.Match.Method != "POST" || m.Match.Path != "/v1/charges" {
+		t.Errorf("Match = %+v, unexpected", m.Match)
+	}
+	if len(m.Match.Body) != 1 || m.Match.Body[0].Path != "amount" || m.Match.Body[0].Matcher.Equals == nil || *m.Match.Body[0].Matcher.Equals != "666" {
+		t.Errorf("Match.Body = %+v, unexpected", m.Match.Body)
+	}
+	if m.Action.Kind != domain.ActionRespond || m.Action.Respond == nil || m.Action.Respond.Status != 402 {
+		t.Errorf("Action = %+v, unexpected", m.Action)
 	}
 	if len(s.Upstreams) != 1 || s.Upstreams[0].TargetURL != "https://api.stripe.com" {
 		t.Errorf("Upstreams = %+v, unexpected", s.Upstreams)
@@ -62,10 +90,7 @@ mocks:
 
 func TestLoadDefaultsToDefaultPartitionWhenSpaceOmitted(t *testing.T) {
 	dir := t.TempDir()
-	writeSeedFile(t, dir, "basic.yaml", `
-mocks:
-  - name: some-mock
-`)
+	writeSeedFile(t, dir, "basic.yaml", "mocks:\n  - name: some-mock\n"+minimalAction)
 	s, err := Load(dir)
 	if err != nil {
 		t.Fatalf("Load(): %v", err)
@@ -77,8 +102,8 @@ mocks:
 
 func TestLoadRejectsDuplicateMockNameInSamePartition(t *testing.T) {
 	dir := t.TempDir()
-	writeSeedFile(t, dir, "a.yaml", "mocks:\n  - name: dup\n")
-	writeSeedFile(t, dir, "b.yaml", "mocks:\n  - name: dup\n")
+	writeSeedFile(t, dir, "a.yaml", "mocks:\n  - name: dup\n"+minimalAction)
+	writeSeedFile(t, dir, "b.yaml", "mocks:\n  - name: dup\n"+minimalAction)
 
 	_, err := Load(dir)
 	if !errors.Is(err, domain.ErrDuplicateID) {
@@ -88,8 +113,8 @@ func TestLoadRejectsDuplicateMockNameInSamePartition(t *testing.T) {
 
 func TestLoadAllowsSameMockNameInDifferentPartitions(t *testing.T) {
 	dir := t.TempDir()
-	writeSeedFile(t, dir, "a.yaml", "space: team-a\nmocks:\n  - name: same-name\n")
-	writeSeedFile(t, dir, "b.yaml", "space: team-b\nmocks:\n  - name: same-name\n")
+	writeSeedFile(t, dir, "a.yaml", "space: team-a\nmocks:\n  - name: same-name\n"+minimalAction)
+	writeSeedFile(t, dir, "b.yaml", "space: team-b\nmocks:\n  - name: same-name\n"+minimalAction)
 
 	s, err := Load(dir)
 	if err != nil {
@@ -105,8 +130,8 @@ func TestLoadAllowsSameMockNameInDifferentPartitions(t *testing.T) {
 
 func TestLoadDoesNotDuplicatePartitionsAcrossMultipleFilesInSameSpace(t *testing.T) {
 	dir := t.TempDir()
-	writeSeedFile(t, dir, "a.yaml", "space: shared\nmocks:\n  - name: mock-a\n")
-	writeSeedFile(t, dir, "b.yaml", "space: shared\nmocks:\n  - name: mock-b\n")
+	writeSeedFile(t, dir, "a.yaml", "space: shared\nmocks:\n  - name: mock-a\n"+minimalAction)
+	writeSeedFile(t, dir, "b.yaml", "space: shared\nmocks:\n  - name: mock-b\n"+minimalAction)
 
 	s, err := Load(dir)
 	if err != nil {
@@ -114,6 +139,24 @@ func TestLoadDoesNotDuplicatePartitionsAcrossMultipleFilesInSameSpace(t *testing
 	}
 	if len(s.Partitions) != 1 || s.Partitions[0].ID != "shared" {
 		t.Fatalf("Partitions = %+v, want a single partition %q", s.Partitions, "shared")
+	}
+}
+
+func TestLoadRejectsMockWithoutAction(t *testing.T) {
+	dir := t.TempDir()
+	writeSeedFile(t, dir, "a.yaml", "mocks:\n  - name: no-action\n")
+
+	if _, err := Load(dir); err == nil {
+		t.Fatal("Load() with a mock declaring no action, want error")
+	}
+}
+
+func TestLoadRejectsMockNameContainingSlash(t *testing.T) {
+	dir := t.TempDir()
+	writeSeedFile(t, dir, "a.yaml", "mocks:\n  - name: bad/name\n"+minimalAction)
+
+	if _, err := Load(dir); err == nil {
+		t.Fatal("Load() with a mock name containing \"/\", want error (it becomes the mock's id, and GET/PUT/DELETE /mocks/{id} can't route a multi-segment id)")
 	}
 }
 

@@ -152,7 +152,7 @@ func (s *Store) InsertRawEphemeralMock(ctx context.Context, sealer crypto.Sealer
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO ephemeral_mocks (id, "partition", name, priority, created_at, match_blob, action_blob)
 		 VALUES (?, ?, ?, 0, ?, ?, ?)`,
-		id, partition, name, time.Now().Unix(), []byte("{}"), sealed,
+		id, partition, name, time.Now().UnixNano(), []byte("{}"), sealed,
 	)
 	if err != nil {
 		return fmt.Errorf("store: insert fixture row: %w", err)
@@ -226,10 +226,12 @@ func (s *Store) PruneTraffic(ctx context.Context, olderThan time.Time) (int, err
 
 // PruneExpiredEphemeralMocks deletes ephemeral mocks whose TTL has elapsed as
 // of now, returning the number removed. Seeded mocks are never stored in
-// this table, so they are never touched.
+// this table, so they are never touched. expires_at is stored in
+// nanoseconds (see CreateMock) — not seconds — so this compares against
+// now.UnixNano().
 func (s *Store) PruneExpiredEphemeralMocks(ctx context.Context, now time.Time) (int, error) {
 	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM ephemeral_mocks WHERE expires_at IS NOT NULL AND expires_at < ?`, now.Unix())
+		`DELETE FROM ephemeral_mocks WHERE expires_at IS NOT NULL AND expires_at < ?`, now.UnixNano())
 	if err != nil {
 		return 0, fmt.Errorf("store: prune expired ephemeral mocks: %w", err)
 	}
