@@ -58,11 +58,12 @@ type scriptDTO struct {
 }
 
 type mockDTO struct {
-	Name     string     `json:"name"`
-	Priority int        `json:"priority"`
-	Match    matchDTO   `json:"match"`
-	Script   *scriptDTO `json:"script,omitempty"`
-	Action   actionDTO  `json:"action"`
+	Name       string     `json:"name"`
+	Priority   int        `json:"priority"`
+	Match      matchDTO   `json:"match"`
+	Script     *scriptDTO `json:"script,omitempty"`
+	Action     actionDTO  `json:"action"`
+	TTLSeconds *int       `json:"ttl_seconds,omitempty"`
 }
 
 type matchTestResponseDTO struct {
@@ -72,11 +73,20 @@ type matchTestResponseDTO struct {
 }
 
 func (m *mockState) createMock(ctx context.Context, dto mockDTO) error {
+	return createMockDTO(ctx, m.s, dto)
+}
+
+// createMockDTO POSTs dto to the default space's /__lyrebird/mocks, the
+// shared low-level helper behind mockState.createMock — pulled out to a
+// package-level function so other Register*Steps files (e.g.
+// steps_lifetimes.go) can create ephemeral mocks without duplicating this
+// request-building logic.
+func createMockDTO(ctx context.Context, s *appState, dto mockDTO) error {
 	raw, err := json.Marshal(dto)
 	if err != nil {
 		return fmt.Errorf("marshal mock dto: %w", err)
 	}
-	url := fmt.Sprintf("http://%s/__lyrebird/mocks", m.s.app.ControlAddr())
+	url := fmt.Sprintf("http://%s/__lyrebird/mocks", s.app.ControlAddr())
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
 	if err != nil {
 		return fmt.Errorf("build create-mock request: %w", err)
