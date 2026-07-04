@@ -31,6 +31,14 @@ func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	if cfg.MCPStdio {
+		if err := bootstrap.RunStdio(ctx, cfg, log); err != nil {
+			log.Error("mcp stdio run failed", "err", err)
+			return 1
+		}
+		return 0
+	}
+
 	app, err := bootstrap.Run(ctx, cfg, log)
 	if err != nil {
 		log.Error("bootstrap failed", "err", err)

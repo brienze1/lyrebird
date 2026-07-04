@@ -192,7 +192,7 @@ func TestMockCRUDGetAndListMergeEphemeralAndSeeded(t *testing.T) {
 		t.Fatalf("Create(): %v", err)
 	}
 
-	list, err := uc.List(context.Background(), "default")
+	list, err := uc.List(context.Background(), "default", "")
 	if err != nil {
 		t.Fatalf("List(): %v", err)
 	}
@@ -206,5 +206,23 @@ func TestMockCRUDGetAndListMergeEphemeralAndSeeded(t *testing.T) {
 	}
 	if got.Lifetime != domain.LifetimeSeeded {
 		t.Errorf("Get() seeded mock Lifetime = %q, want %q", got.Lifetime, domain.LifetimeSeeded)
+	}
+}
+
+func TestMockCRUDListFiltersByGroup(t *testing.T) {
+	uc, _ := newCRUD()
+	if _, err := uc.Create(context.Background(), MockInput{Partition: "default", Name: "in-group", Group: "checkout", Action: respondAction(200)}); err != nil {
+		t.Fatalf("Create(): %v", err)
+	}
+	if _, err := uc.Create(context.Background(), MockInput{Partition: "default", Name: "other-group", Group: "billing", Action: respondAction(200)}); err != nil {
+		t.Fatalf("Create(): %v", err)
+	}
+
+	list, err := uc.List(context.Background(), "default", "checkout")
+	if err != nil {
+		t.Fatalf("List(): %v", err)
+	}
+	if len(list) != 1 || list[0].Name != "in-group" {
+		t.Fatalf("List(group=checkout) = %+v, want just [in-group]", list)
 	}
 }

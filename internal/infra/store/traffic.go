@@ -101,6 +101,10 @@ func (s *Store) ListTraffic(ctx context.Context, partition string, filter usecas
 		args = append(args, filter.Until.UnixMilli())
 	}
 	q += ` ORDER BY "timestamp" DESC`
+	if filter.Limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, filter.Limit)
+	}
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {

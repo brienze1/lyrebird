@@ -30,6 +30,10 @@ type Config struct {
 	SeedDir         string
 	GCInterval      time.Duration
 	UpstreamTimeout time.Duration
+	// MCPStdio, when true, makes the process serve MCP over stdin/stdout
+	// only (no HTTP listeners) instead of running the normal HTTP daemon —
+	// the local-agent transport mode (contracts/mcp-tools.md).
+	MCPStdio bool
 }
 
 // Load reads and validates configuration from the environment. It fails fast
@@ -63,6 +67,7 @@ func Load() (Config, error) {
 	}
 	cfg.AllowProxyHosts = parseCSV(os.Getenv("LYREBIRD_ALLOW_PROXY_HOSTS"))
 	cfg.AuthKeys = parseCSV(os.Getenv("LYREBIRD_AUTH_KEYS"))
+	cfg.MCPStdio = os.Getenv("LYREBIRD_MCP_STDIO") != ""
 
 	if cfg.DataKeyB64 != "" {
 		if _, err := base64.StdEncoding.DecodeString(cfg.DataKeyB64); err != nil {

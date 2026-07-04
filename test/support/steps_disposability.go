@@ -39,6 +39,15 @@ type appState struct {
 
 	app     *bootstrap.App
 	bootErr error
+
+	// preShutdownCleanup runs (in order) before app.Shutdown in this
+	// package's own After hook below — for state owned by other
+	// Register*Steps functions (e.g. steps_mcp.go's client session) that
+	// must close before the control-plane listener shuts down, not after:
+	// Shutdown's graceful-drain waits up to its own timeout for any
+	// still-open connection, so an unclosed MCP Streamable HTTP session
+	// otherwise adds that whole timeout to every scenario that uses one.
+	preShutdownCleanup []func()
 }
 
 func (s *appState) aFreshTemporaryLyrebirdDataDirectory() error {
@@ -143,6 +152,9 @@ func RegisterCoreAppSteps(sc *godog.ScenarioContext, s *appState) {
 	sc.Step(`^the control plane reports ready$`, s.theControlPlaneReportsReady)
 
 	sc.After(func(ctx context.Context, _ *godog.Scenario, _ error) (context.Context, error) {
+		for _, cleanup := range s.preShutdownCleanup {
+			cleanup()
+		}
 		if s.app != nil {
 			_ = s.app.Shutdown(ctx)
 		}
