@@ -26,6 +26,10 @@ var (
 	// Match condition that fails MatchEval.ValidateMatch, e.g. a bad regex).
 	ErrInvalidMock = errors.New("lyrebird: invalid mock")
 
+	// ErrInvalidPartition is returned when a Partition fails basic
+	// validation (missing id).
+	ErrInvalidPartition = errors.New("lyrebird: invalid partition")
+
 	// ErrSeededMockImmutable is returned when an update or delete targets a
 	// seeded mock. Seeded mocks are protected config, not runtime state
 	// (constitution Principle III, FR-025) — the rejection is explicit

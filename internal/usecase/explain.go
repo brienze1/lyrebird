@@ -34,7 +34,7 @@ func Explain(err error) Explained {
 	switch {
 	case err == nil:
 		return Explained{}
-	case errors.Is(err, domain.ErrInvalidMock), errors.Is(err, domain.ErrInvalidUpstream):
+	case errors.Is(err, domain.ErrInvalidMock), errors.Is(err, domain.ErrInvalidUpstream), errors.Is(err, domain.ErrInvalidPartition):
 		return Explained{KindValidation, err.Error() + " — check the field(s) named above against this tool's example payload."}
 	case errors.Is(err, domain.ErrSeededMockImmutable):
 		return Explained{KindConflict, err.Error() + " — seeded mocks come from mounted config; create a new ephemeral mock (optionally at a higher priority) instead of editing this one."}
