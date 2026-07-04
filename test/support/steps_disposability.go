@@ -36,6 +36,8 @@ type appState struct {
 	// at boot time, there is no live reload.
 	upstreamTimeout time.Duration
 	bodyCapBytes    int64
+	gcInterval      time.Duration
+	trafficTTL      time.Duration
 
 	app     *bootstrap.App
 	bootErr error
@@ -80,6 +82,24 @@ func (s *appState) bodyCapIsConfiguredToBytes(n int64) error {
 	return nil
 }
 
+func (s *appState) theGCIntervalIsConfiguredTo(d string) error {
+	parsed, err := time.ParseDuration(d)
+	if err != nil {
+		return fmt.Errorf("parse GC interval %q: %w", d, err)
+	}
+	s.gcInterval = parsed
+	return nil
+}
+
+func (s *appState) theTrafficTTLIsConfiguredTo(d string) error {
+	parsed, err := time.ParseDuration(d)
+	if err != nil {
+		return fmt.Errorf("parse traffic TTL %q: %w", d, err)
+	}
+	s.trafficTTL = parsed
+	return nil
+}
+
 func (s *appState) bootWithDataKey(ctx context.Context, dataKeyB64 string) error {
 	upstreamTimeout := s.upstreamTimeout
 	if upstreamTimeout == 0 {
@@ -89,18 +109,26 @@ func (s *appState) bootWithDataKey(ctx context.Context, dataKeyB64 string) error
 	if bodyCapBytes == 0 {
 		bodyCapBytes = 1 << 20
 	}
+	gcInterval := s.gcInterval
+	if gcInterval == 0 {
+		gcInterval = time.Hour // most scenarios don't need GC to actually fire
+	}
+	trafficTTL := s.trafficTTL
+	if trafficTTL == 0 {
+		trafficTTL = time.Hour
+	}
 
 	cfg := config.Config{
 		DataPlaneAddr:    "127.0.0.1:0",
 		ControlPlaneAddr: "127.0.0.1:0",
 		DefaultSpace:     "default",
-		TrafficTTL:       time.Hour,
+		TrafficTTL:       trafficTTL,
 		TokenTTL:         time.Hour,
 		BodyCapBytes:     bodyCapBytes,
 		UpstreamTimeout:  upstreamTimeout,
 		DBPath:           s.dbPath,
 		SeedDir:          s.seedDir,
-		GCInterval:       time.Hour, // scenario doesn't need GC to actually fire
+		GCInterval:       gcInterval,
 		DataKeyB64:       dataKeyB64,
 	}
 
@@ -146,6 +174,8 @@ func RegisterCoreAppSteps(sc *godog.ScenarioContext, s *appState) {
 	sc.Step(`^a fresh temporary Lyrebird data directory$`, s.aFreshTemporaryLyrebirdDataDirectory)
 	sc.Step(`^the upstream timeout is configured to "([^"]*)"$`, s.upstreamTimeoutIsConfiguredTo)
 	sc.Step(`^the body cap is configured to "(\d+)" bytes$`, s.bodyCapIsConfiguredToBytes)
+	sc.Step(`^the GC interval is configured to "([^"]*)"$`, s.theGCIntervalIsConfiguredTo)
+	sc.Step(`^the traffic TTL is configured to "([^"]*)"$`, s.theTrafficTTLIsConfiguredTo)
 	sc.Step(`^Lyrebird boots$`, s.lyrebirdBoots)
 	sc.Step(`^Lyrebird boots with data key "([^"]*)"$`, s.lyrebirdBootsWithDataKey)
 	sc.Step(`^boot succeeds$`, s.bootSucceeds)
