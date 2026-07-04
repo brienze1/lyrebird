@@ -89,6 +89,15 @@ type ScenarioStateRepo interface {
 	ResetAllScenarios(ctx context.Context, partition string) error
 }
 
+// ScenarioPeeker is the read-only subset of ScenarioStateRepo the match-time
+// candidate loop needs — peeking exhaustion must never mutate state for a
+// candidate that might get discarded later (e.g. by a subsequent script
+// gate), so it's named and typed separately from the full, state-consuming
+// ScenarioStateRepo even though *store.Store satisfies both identically.
+type ScenarioPeeker interface {
+	ScenarioIndex(ctx context.Context, partition, mockID string) (int, error)
+}
+
 // Clock abstracts time.Now so tests can control it.
 type Clock interface{ Now() time.Time }
 
@@ -171,6 +180,55 @@ type ScriptEval interface {
 	// anything else JSON-encodable is JSON-marshaled. Same fail-safe error
 	// contract as EvalMatch.
 	EvalRespond(src string, in MatchInput) ([]byte, error)
+	// EvalRewriteRequest runs a proxy mock's rewrite_request script and
+	// returns which parts of the outbound request it changed. A zero
+	// RewrittenRequest means "no changes" (every field left nil/unset), not
+	// an error. Same fail-safe error contract as EvalMatch, but the caller's
+	// safe fallback here is different (see proxy.Engine): forward the
+	// request unmodified, never synthesize a 500 — a real proxy call has no
+	// script-shaped fallback to fail into the way a mock's respond_src does.
+	EvalRewriteRequest(src string, in MatchInput) (RewrittenRequest, error)
+	// EvalTransformResponse runs a proxy mock's transform_response script
+	// against the real upstream response and returns which parts it
+	// changed. Same fail-safe error contract/fallback philosophy as
+	// EvalRewriteRequest.
+	EvalTransformResponse(src string, in TransformInput) (TransformedResponse, error)
+}
+
+// TransformInput is the read-only view of a real upstream response a
+// transform_response script evaluates against, plus the original inbound
+// request (so a script can reference req.* the same way respond_src can).
+type TransformInput struct {
+	Status  int
+	Headers map[string][]string
+	Body    []byte
+	Req     MatchInput
+}
+
+// RewrittenRequest is what a rewrite_request script may change about an
+// outbound proxied request. A nil Method/Path means "leave unchanged"; a nil
+// Headers map means "no header changes" (a present key with a nil value
+// means "delete this header," anything else replaces/sets it — merge, not
+// wholesale replace); BodySet distinguishes "didn't touch the body" from
+// "explicitly set it to empty." Query parameters are deliberately not
+// rewritable — a script that needs to change them writes a Path that
+// already includes the new query string.
+type RewrittenRequest struct {
+	Method  *string
+	Path    *string
+	Headers map[string][]string
+	Body    []byte
+	BodySet bool
+}
+
+// TransformedResponse mirrors RewrittenRequest for the response side: a nil
+// Status means "leave unchanged," Headers merges the same way, BodySet
+// distinguishes "didn't touch the body" from "explicitly set it to empty."
+type TransformedResponse struct {
+	Status  *int
+	Headers map[string][]string
+	Body    []byte
+	BodySet bool
 }
 
 // ScriptError wraps a ScriptEval failure (match or respond phase) with the

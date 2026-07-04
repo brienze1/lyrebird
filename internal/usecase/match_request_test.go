@@ -30,6 +30,12 @@ func (s scriptedEval) EvalMatch(_ string, _ MatchInput) (bool, error) {
 	return s.matchResult, s.matchErr
 }
 func (s scriptedEval) EvalRespond(_ string, _ MatchInput) ([]byte, error) { return nil, nil }
+func (s scriptedEval) EvalRewriteRequest(_ string, _ MatchInput) (RewrittenRequest, error) {
+	return RewrittenRequest{}, nil
+}
+func (s scriptedEval) EvalTransformResponse(_ string, _ TransformInput) (TransformedResponse, error) {
+	return TransformedResponse{}, nil
+}
 
 func mockWithScript(id string, priority int, matchSrc string) domain.Mock {
 	m := domain.Mock{ID: id, Partition: "default", Priority: priority, CreatedAt: time.Unix(int64(priority), 0)}
@@ -46,7 +52,7 @@ func TestMatchRequestScriptGateANDsWithDeclarativeMatch(t *testing.T) {
 		t.Fatalf("CreateMock(): %v", err)
 	}
 
-	uc := NewMatchRequest(repo, &fakeSeededSource{}, alwaysMatchEval{}, scriptedEval{matchResult: true})
+	uc := NewMatchRequest(repo, &fakeSeededSource{}, alwaysMatchEval{}, scriptedEval{matchResult: true}, &fakeScenarioStateRepo{})
 	got, matched, err := uc.Execute(context.Background(), "default", MatchInput{Method: "GET"})
 	if err != nil {
 		t.Fatalf("Execute(): %v", err)
@@ -62,7 +68,7 @@ func TestMatchRequestScriptGateRejectsWhenScriptReturnsFalse(t *testing.T) {
 		t.Fatalf("CreateMock(): %v", err)
 	}
 
-	uc := NewMatchRequest(repo, &fakeSeededSource{}, alwaysMatchEval{}, scriptedEval{matchResult: false})
+	uc := NewMatchRequest(repo, &fakeSeededSource{}, alwaysMatchEval{}, scriptedEval{matchResult: false}, &fakeScenarioStateRepo{})
 	_, matched, err := uc.Execute(context.Background(), "default", MatchInput{})
 	if err != nil {
 		t.Fatalf("Execute(): %v", err)
@@ -86,7 +92,7 @@ func TestMatchRequestScriptErrorFailsSafeRatherThanFallingThrough(t *testing.T) 
 	}
 
 	scriptErr := errors.New("boom")
-	uc := NewMatchRequest(repo, &fakeSeededSource{}, alwaysMatchEval{}, scriptedEval{matchErr: scriptErr})
+	uc := NewMatchRequest(repo, &fakeSeededSource{}, alwaysMatchEval{}, scriptedEval{matchErr: scriptErr}, &fakeScenarioStateRepo{})
 	got, matched, err := uc.Execute(context.Background(), "default", MatchInput{})
 	if matched {
 		t.Fatal("Execute() matched, want false — a script error must fail safe, not match")
@@ -100,6 +106,59 @@ func TestMatchRequestScriptErrorFailsSafeRatherThanFallingThrough(t *testing.T) 
 	}
 	if got.ID != "broken" {
 		t.Errorf("Execute() returned mock %+v, want the mock whose script failed (for traffic recording)", got)
+	}
+}
+
+func TestMatchRequestSkipsExhaustedFallthroughScenarioCandidate(t *testing.T) {
+	repo := newFakeMockRepo()
+	high := domain.Mock{
+		ID: "exhausted", Partition: "default", Priority: 10, CreatedAt: time.Unix(10, 0),
+		Action:   domain.Action{Kind: domain.ActionRespond, Respond: &domain.RespondAction{Status: 200}},
+		Scenario: &domain.Scenario{Responses: []domain.RespondAction{{Body: []byte("one")}}, OnExhaust: domain.OnExhaustFallthrough},
+	}
+	low := domain.Mock{
+		ID: "fallback", Partition: "default", Priority: 1, CreatedAt: time.Unix(1, 0),
+		Action: domain.Action{Kind: domain.ActionRespond, Respond: &domain.RespondAction{Status: 200}},
+	}
+	if err := repo.CreateMock(context.Background(), high); err != nil {
+		t.Fatalf("CreateMock(high): %v", err)
+	}
+	if err := repo.CreateMock(context.Background(), low); err != nil {
+		t.Fatalf("CreateMock(low): %v", err)
+	}
+
+	scenario := &fakeScenarioStateRepo{indexes: map[string]int{"default/exhausted": 1}} // already consumed its only response
+	uc := NewMatchRequest(repo, &fakeSeededSource{}, alwaysMatchEval{}, scriptedEval{matchResult: true}, scenario)
+
+	got, matched, err := uc.Execute(context.Background(), "default", MatchInput{})
+	if err != nil {
+		t.Fatalf("Execute(): %v", err)
+	}
+	if !matched || got.ID != "fallback" {
+		t.Fatalf("Execute() = (%+v, %v), want the exhausted fallthrough candidate skipped in favor of fallback", got, matched)
+	}
+}
+
+func TestMatchRequestDoesNotSkipRepeatLastScenarioEvenWhenExhausted(t *testing.T) {
+	repo := newFakeMockRepo()
+	m := domain.Mock{
+		ID: "repeater", Partition: "default", Priority: 10, CreatedAt: time.Unix(10, 0),
+		Action:   domain.Action{Kind: domain.ActionRespond, Respond: &domain.RespondAction{Status: 200}},
+		Scenario: &domain.Scenario{Responses: []domain.RespondAction{{Body: []byte("one")}}, OnExhaust: domain.OnExhaustRepeatLast},
+	}
+	if err := repo.CreateMock(context.Background(), m); err != nil {
+		t.Fatalf("CreateMock(): %v", err)
+	}
+
+	scenario := &fakeScenarioStateRepo{indexes: map[string]int{"default/repeater": 5}}
+	uc := NewMatchRequest(repo, &fakeSeededSource{}, alwaysMatchEval{}, scriptedEval{matchResult: true}, scenario)
+
+	got, matched, err := uc.Execute(context.Background(), "default", MatchInput{})
+	if err != nil {
+		t.Fatalf("Execute(): %v", err)
+	}
+	if !matched || got.ID != "repeater" {
+		t.Fatalf("Execute() = (%+v, %v), want repeat_last to keep matching even once exhausted", got, matched)
 	}
 }
 

@@ -13,17 +13,18 @@ import (
 // UpdateMock/DeleteMock explicitly reject any id that resolves to a seeded
 // mock (constitution Principle III, FR-025).
 type MockCRUD struct {
-	repo   MockRepo
-	seeds  SeededMockSource
-	match  MatchEval
-	script ScriptEval
-	ids    IDGen
-	clock  Clock
+	repo     MockRepo
+	seeds    SeededMockSource
+	match    MatchEval
+	script   ScriptEval
+	ids      IDGen
+	clock    Clock
+	scenario ScenarioStateRepo
 }
 
 // NewMockCRUD builds a MockCRUD use case.
-func NewMockCRUD(repo MockRepo, seeds SeededMockSource, match MatchEval, script ScriptEval, ids IDGen, clock Clock) *MockCRUD {
-	return &MockCRUD{repo: repo, seeds: seeds, match: match, script: script, ids: ids, clock: clock}
+func NewMockCRUD(repo MockRepo, seeds SeededMockSource, match MatchEval, script ScriptEval, ids IDGen, clock Clock, scenario ScenarioStateRepo) *MockCRUD {
+	return &MockCRUD{repo: repo, seeds: seeds, match: match, script: script, ids: ids, clock: clock, scenario: scenario}
 }
 
 // MockInput carries the caller-settable fields of a mock — shared by Create
@@ -37,6 +38,7 @@ type MockInput struct {
 	Match      domain.Match
 	Script     *domain.Script
 	Action     domain.Action
+	Scenario   *domain.Scenario
 	TTLSeconds *int
 }
 
@@ -58,7 +60,34 @@ func (uc *MockCRUD) validate(in MockInput) error {
 			return fmt.Errorf("script.respond_src: %w", err)
 		}
 	}
+	if in.Scenario != nil {
+		if in.Action.Kind != domain.ActionRespond {
+			return fmt.Errorf("%w: scenario requires action kind respond", domain.ErrInvalidMock)
+		}
+		if len(in.Scenario.Responses) == 0 {
+			return fmt.Errorf("%w: scenario.responses must not be empty", domain.ErrInvalidMock)
+		}
+		switch in.Scenario.OnExhaust {
+		case domain.OnExhaustRepeatLast, domain.OnExhaustWrap, domain.OnExhaustFallthrough, "":
+		default:
+			return fmt.Errorf("%w: unknown scenario.on_exhaust %q", domain.ErrInvalidMock, in.Scenario.OnExhaust)
+		}
+	}
 	return nil
+}
+
+// scenarioWithDefault returns sc with OnExhaust defaulted to repeat_last
+// when unset (mirrors RespondAction.Status's existing 0-defaults-to-200
+// precedent). nil-safe.
+func scenarioWithDefault(sc *domain.Scenario) *domain.Scenario {
+	if sc == nil {
+		return nil
+	}
+	out := *sc
+	if out.OnExhaust == "" {
+		out.OnExhaust = domain.OnExhaustRepeatLast
+	}
+	return &out
 }
 
 func validateAction(a domain.Action) error {
@@ -98,6 +127,7 @@ func (uc *MockCRUD) Create(ctx context.Context, in MockInput) (domain.Mock, erro
 		Match:      in.Match,
 		Script:     in.Script,
 		Action:     in.Action,
+		Scenario:   scenarioWithDefault(in.Scenario),
 		CreatedAt:  uc.clock.Now(),
 	}
 	if err := uc.repo.CreateMock(ctx, m); err != nil {
@@ -162,11 +192,23 @@ func (uc *MockCRUD) Update(ctx context.Context, partition, id string, in MockInp
 	updated := domain.Mock{
 		ID: existing.ID, Partition: existing.Partition, Lifetime: domain.LifetimeEphemeral,
 		Name: in.Name, TTLSeconds: in.TTLSeconds, Priority: in.Priority, Group: in.Group,
-		Match: in.Match, Script: in.Script, Action: in.Action, CreatedAt: existing.CreatedAt,
+		Match: in.Match, Script: in.Script, Action: in.Action, Scenario: scenarioWithDefault(in.Scenario),
+		CreatedAt: existing.CreatedAt,
 	}
 	if err := uc.repo.UpdateMock(ctx, updated); err != nil {
 		return domain.Mock{}, fmt.Errorf("usecase: update mock: %w", err)
 	}
+	// Editing a scenario's response list would otherwise leave a stale,
+	// possibly out-of-range stored index behind — resetting here is
+	// idempotent (a no-op if no scenario_state row exists) and cheap
+	// compared to reasoning about partial-sequence carryover across edits.
+	// The update itself already succeeded above; a failure here is
+	// deliberately not propagated as this call's error (matching the
+	// "never fail an already-completed operation for a best-effort
+	// cleanup step" convention used elsewhere, e.g. proxy.Handler.recordAsync) —
+	// worst case a stale scenario index lingers, which AdvanceScenario's
+	// own clamping/wrap logic already tolerates.
+	_ = uc.scenario.ResetScenario(ctx, partition, id)
 	return updated, nil
 }
 
@@ -187,6 +229,12 @@ func (uc *MockCRUD) Delete(ctx context.Context, partition, id string) error {
 	if err := uc.repo.DeleteMock(ctx, partition, id); err != nil {
 		return fmt.Errorf("usecase: delete mock: %w", err)
 	}
+	// Otherwise a deleted scenario mock's state row is orphaned, keyed to
+	// an id nothing will ever look up again — harmless but pointless to
+	// leave behind when cleaning it up here is a cheap, idempotent no-op.
+	// The delete itself already succeeded above; not propagated as an
+	// error for the same reason as Update's own best-effort cleanup call.
+	_ = uc.scenario.ResetScenario(ctx, partition, id)
 	return nil
 }
 

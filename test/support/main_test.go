@@ -39,4 +39,5 @@ func InitializeScenario(ctx *godog.ScenarioContext) {
 	RegisterScriptingSteps(ctx, s)
 	RegisterPartitionSteps(ctx, s)
 	RegisterLifetimeSteps(ctx, s)
+	RegisterAdvancedProxySteps(ctx, s)
 }

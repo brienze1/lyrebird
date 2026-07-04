@@ -23,14 +23,14 @@ import (
 // round trips collide into the same bucket, observed as a flaky BDD
 // scenario).
 func (s *Store) CreateMock(ctx context.Context, m domain.Mock) error {
-	matchJSON, scriptBlob, actionBlob, err := encodeMock(s, m)
+	matchJSON, scriptBlob, scenarioBlob, actionBlob, err := encodeMock(s, m)
 	if err != nil {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO ephemeral_mocks (id, "partition", name, priority, "group", created_at, expires_at, match_blob, script_blob, action_blob)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		m.ID, m.Partition, m.Name, m.Priority, m.Group, m.CreatedAt.UnixNano(), expiresAtColumn(m), matchJSON, scriptBlob, actionBlob,
+		INSERT INTO ephemeral_mocks (id, "partition", name, priority, "group", created_at, expires_at, match_blob, script_blob, scenario_blob, action_blob)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.ID, m.Partition, m.Name, m.Priority, m.Group, m.CreatedAt.UnixNano(), expiresAtColumn(m), matchJSON, scriptBlob, scenarioBlob, actionBlob,
 	)
 	if err != nil {
 		return fmt.Errorf("store: create mock: %w", err)
@@ -43,10 +43,10 @@ func (s *Store) CreateMock(ctx context.Context, m domain.Mock) error {
 // at-rest key (FR-029: undecryptable is treated as absent, not corruption).
 func (s *Store) GetMock(ctx context.Context, partition, id string) (domain.Mock, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, "partition", name, priority, "group", created_at, expires_at, match_blob, script_blob, action_blob
+		SELECT id, "partition", name, priority, "group", created_at, expires_at, match_blob, script_blob, scenario_blob, action_blob
 		FROM ephemeral_mocks WHERE id = ? AND "partition" = ?`, id, partition)
 
-	m, scriptBlob, actionBlob, err := scanMockRow(row)
+	m, scriptBlob, scenarioBlob, actionBlob, err := scanMockRow(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.Mock{}, domain.ErrNotFound
@@ -57,6 +57,7 @@ func (s *Store) GetMock(ctx context.Context, partition, id string) (domain.Mock,
 		return domain.Mock{}, domain.ErrNotFound
 	}
 	decodeMockScript(s, &m, scriptBlob)
+	decodeMockScenario(s, &m, scenarioBlob)
 	return m, nil
 }
 
@@ -65,7 +66,7 @@ func (s *Store) GetMock(ctx context.Context, partition, id string) (domain.Mock,
 // decrypt is silently skipped, not treated as an error (FR-029).
 func (s *Store) ListMocks(ctx context.Context, partition string) ([]domain.Mock, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, "partition", name, priority, "group", created_at, expires_at, match_blob, script_blob, action_blob
+		SELECT id, "partition", name, priority, "group", created_at, expires_at, match_blob, script_blob, scenario_blob, action_blob
 		FROM ephemeral_mocks WHERE "partition" = ?`, partition)
 	if err != nil {
 		return nil, fmt.Errorf("store: list mocks: %w", err)
@@ -74,7 +75,7 @@ func (s *Store) ListMocks(ctx context.Context, partition string) ([]domain.Mock,
 
 	var out []domain.Mock
 	for rows.Next() {
-		m, scriptBlob, actionBlob, err := scanMockRow(rows)
+		m, scriptBlob, scenarioBlob, actionBlob, err := scanMockRow(rows)
 		if err != nil {
 			return nil, fmt.Errorf("store: scan mock row: %w", err)
 		}
@@ -82,6 +83,7 @@ func (s *Store) ListMocks(ctx context.Context, partition string) ([]domain.Mock,
 			continue
 		}
 		decodeMockScript(s, &m, scriptBlob)
+		decodeMockScenario(s, &m, scenarioBlob)
 		out = append(out, m)
 	}
 	return out, rows.Err()
@@ -92,15 +94,15 @@ func (s *Store) ListMocks(ctx context.Context, partition string) ([]domain.Mock,
 // before calling this — the store layer has no notion of seeded mocks at
 // all, since they never reach it.
 func (s *Store) UpdateMock(ctx context.Context, m domain.Mock) error {
-	matchJSON, scriptBlob, actionBlob, err := encodeMock(s, m)
+	matchJSON, scriptBlob, scenarioBlob, actionBlob, err := encodeMock(s, m)
 	if err != nil {
 		return err
 	}
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE ephemeral_mocks
-		SET name = ?, priority = ?, "group" = ?, expires_at = ?, match_blob = ?, script_blob = ?, action_blob = ?
+		SET name = ?, priority = ?, "group" = ?, expires_at = ?, match_blob = ?, script_blob = ?, scenario_blob = ?, action_blob = ?
 		WHERE id = ? AND "partition" = ?`,
-		m.Name, m.Priority, m.Group, expiresAtColumn(m), matchJSON, scriptBlob, actionBlob, m.ID, m.Partition,
+		m.Name, m.Priority, m.Group, expiresAtColumn(m), matchJSON, scriptBlob, scenarioBlob, actionBlob, m.ID, m.Partition,
 	)
 	if err != nil {
 		return fmt.Errorf("store: update mock: %w", err)
@@ -150,31 +152,43 @@ func expiresAtColumn(m domain.Mock) any {
 }
 
 // encodeMock returns match_blob (plaintext), script_blob (sealed, nil if m
-// has no Script), and action_blob (sealed).
-func encodeMock(s *Store, m domain.Mock) (matchJSON, scriptBlob, actionBlob []byte, err error) {
+// has no Script), scenario_blob (sealed, nil if m has no Scenario — a
+// scenario's response bodies may carry sensitive fixture data, same
+// treatment as script_blob), and action_blob (sealed).
+func encodeMock(s *Store, m domain.Mock) (matchJSON, scriptBlob, scenarioBlob, actionBlob []byte, err error) {
 	matchJSON, err = json.Marshal(m.Match)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("store: marshal match: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("store: marshal match: %w", err)
 	}
 	if m.Script != nil {
 		scriptJSON, err := json.Marshal(m.Script)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("store: marshal script: %w", err)
+			return nil, nil, nil, nil, fmt.Errorf("store: marshal script: %w", err)
 		}
 		scriptBlob, err = s.sealer.Seal(scriptJSON)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("store: seal script: %w", err)
+			return nil, nil, nil, nil, fmt.Errorf("store: seal script: %w", err)
+		}
+	}
+	if m.Scenario != nil {
+		scenarioJSON, err := json.Marshal(m.Scenario)
+		if err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("store: marshal scenario: %w", err)
+		}
+		scenarioBlob, err = s.sealer.Seal(scenarioJSON)
+		if err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("store: seal scenario: %w", err)
 		}
 	}
 	actionJSON, err := json.Marshal(m.Action)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("store: marshal action: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("store: marshal action: %w", err)
 	}
 	actionBlob, err = s.sealer.Seal(actionJSON)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("store: seal action: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("store: seal action: %w", err)
 	}
-	return matchJSON, scriptBlob, actionBlob, nil
+	return matchJSON, scriptBlob, scenarioBlob, actionBlob, nil
 }
 
 func decodeMockAction(s *Store, m *domain.Mock, actionBlob []byte) error {
@@ -208,17 +222,36 @@ func decodeMockScript(s *Store, m *domain.Mock, scriptBlob []byte) {
 	m.Script = &scr
 }
 
+// decodeMockScenario mirrors decodeMockScript's graceful-degrade-to-nil
+// behavior — a scenario decode failure does NOT make the whole mock "not
+// found": Action alone still fully describes the mock's non-scenario
+// behavior without it.
+func decodeMockScenario(s *Store, m *domain.Mock, scenarioBlob []byte) {
+	scenarioJSON, ok := s.decryptOrAbsent(scenarioBlob, "ephemeral_mocks id="+m.ID+" scenario")
+	if !ok {
+		m.Scenario = nil
+		return
+	}
+	var sc domain.Scenario
+	if err := json.Unmarshal(scenarioJSON, &sc); err != nil {
+		s.log.Warn("ephemeral mock scenario unmarshal failed, treated as absent", "id", m.ID, "err", err)
+		m.Scenario = nil
+		return
+	}
+	m.Scenario = &sc
+}
+
 // scanMockRow uses the package's shared rowScanner (traffic.go) —
 // satisfied by both *sql.Row (GetMock) and *sql.Rows (ListMocks).
-func scanMockRow(row rowScanner) (domain.Mock, []byte, []byte, error) {
+func scanMockRow(row rowScanner) (domain.Mock, []byte, []byte, []byte, error) {
 	var m domain.Mock
 	var group sql.NullString
 	var expiresAt sql.NullInt64
 	var createdAtNanos int64
-	var matchJSON, scriptBlob, actionBlob []byte
+	var matchJSON, scriptBlob, scenarioBlob, actionBlob []byte
 
-	if err := row.Scan(&m.ID, &m.Partition, &m.Name, &m.Priority, &group, &createdAtNanos, &expiresAt, &matchJSON, &scriptBlob, &actionBlob); err != nil {
-		return domain.Mock{}, nil, nil, err
+	if err := row.Scan(&m.ID, &m.Partition, &m.Name, &m.Priority, &group, &createdAtNanos, &expiresAt, &matchJSON, &scriptBlob, &scenarioBlob, &actionBlob); err != nil {
+		return domain.Mock{}, nil, nil, nil, err
 	}
 	m.Group = group.String
 	m.Lifetime = domain.LifetimeEphemeral
@@ -228,7 +261,7 @@ func scanMockRow(row rowScanner) (domain.Mock, []byte, []byte, error) {
 		m.TTLSeconds = &ttl
 	}
 	if err := json.Unmarshal(matchJSON, &m.Match); err != nil {
-		return domain.Mock{}, nil, nil, fmt.Errorf("unmarshal match: %w", err)
+		return domain.Mock{}, nil, nil, nil, fmt.Errorf("unmarshal match: %w", err)
 	}
-	return m, scriptBlob, actionBlob, nil
+	return m, scriptBlob, scenarioBlob, actionBlob, nil
 }

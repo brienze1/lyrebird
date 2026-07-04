@@ -42,6 +42,15 @@ type scriptEvaluator interface {
 	EvalRespond(src string, in usecase.MatchInput) ([]byte, error)
 }
 
+// scenarioAdvancer is the subset of usecase.ScenarioStateRepo Handler needs
+// directly — consuming the next response slot once serveMocked has
+// committed to answering with a scenario mock (MatchRequest's own
+// read-only ScenarioPeeker already handled the "is this candidate
+// exhausted" check before matching got this far).
+type scenarioAdvancer interface {
+	AdvanceScenario(ctx context.Context, partition, mockID string) (int, error)
+}
+
 // Handler is Lyrebird's data-plane entry point (T029): a mock-match check
 // (US2) runs ahead of spy passthrough (US1). A matched action=respond mock
 // is built and written directly — h.upstreams.Execute and h.engine.Forward
@@ -59,23 +68,38 @@ type Handler struct {
 	matchReq     mockMatcher
 	tpl          usecase.Templater
 	script       scriptEvaluator
+	scenario     scenarioAdvancer
 	engine       *Engine
 	bodyCapBytes int64
 	clock        usecase.Clock
 	log          *slog.Logger
+	allowHosts   []string
+	serverCtx    context.Context
 }
 
-// NewHandler builds the data-plane Handler.
+// NewHandler builds the data-plane Handler. serverCtx is the
+// process/server-lifetime context (from bootstrap.Run), threaded through to
+// a FaultTimeout hang so it can outlive this specific request's own
+// ServeHTTP call — see fault.go's serveFault doc comment for why
+// r.Context() alone can't be used for that. allowHosts is
+// cfg.AllowProxyHosts; empty means every host may be proxied (today's
+// behavior, preserved — Principle V: a security feature activates only
+// when explicitly configured).
 func NewHandler(
+	serverCtx context.Context,
 	upstreams upstreamLister, record trafficRecorder, matchReq mockMatcher, tpl usecase.Templater,
-	script scriptEvaluator, engine *Engine, bodyCapBytes int64, clock usecase.Clock, log *slog.Logger,
+	script scriptEvaluator, scenario scenarioAdvancer, engine *Engine, bodyCapBytes int64,
+	clock usecase.Clock, log *slog.Logger, allowHosts []string,
 ) *Handler {
 	if log == nil {
 		log = slog.Default()
 	}
+	if serverCtx == nil {
+		serverCtx = context.Background()
+	}
 	return &Handler{
-		upstreams: upstreams, record: record, matchReq: matchReq, tpl: tpl, script: script,
-		engine: engine, bodyCapBytes: bodyCapBytes, clock: clock, log: log,
+		upstreams: upstreams, record: record, matchReq: matchReq, tpl: tpl, script: script, scenario: scenario,
+		engine: engine, bodyCapBytes: bodyCapBytes, clock: clock, log: log, allowHosts: allowHosts, serverCtx: serverCtx,
 	}
 }
 
@@ -118,6 +142,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveFaulted(w, r, partition, start, reqHeaders, reqBody, reqCapture, mock)
 		return
 	}
+	if matched && mock.Action.Kind == domain.ActionProxy && mock.Action.Proxy != nil {
+		mockID := mock.ID
+		h.serveProxied(w, r, partition, start, reqHeaders, reqBody, reqCapture, in, mock.Action.Proxy, &mockID)
+		return
+	}
+
+	h.serveProxied(w, r, partition, start, reqHeaders, reqBody, reqCapture, in, nil, nil)
+}
+
+// serveProxied is the real-upstream path — reached both by a bare unmatched
+// request (action, matchedMockID nil) and by an explicit action=proxy mock
+// match (action carries that mock's rewrite/transform/latency config,
+// matchedMockID its id). Unifying both into one method is what lets the
+// allow/deny host check (FR-006) and Engine.Forward's rewrite/transform
+// hooks apply identically regardless of which path led here.
+func (h *Handler) serveProxied(
+	w http.ResponseWriter, r *http.Request, partition string, start time.Time,
+	reqHeaders map[string][]string, reqBody io.Reader, reqCapture *cappedCapture,
+	in usecase.MatchInput, action *domain.ProxyAction, matchedMockID *string,
+) {
+	if !HostAllowed(h.allowHosts, r.Host) {
+		h.serveBlocked(w, r, partition, start, reqHeaders, reqBody, reqCapture)
+		return
+	}
 
 	upstreams, err := h.upstreams.Execute(r.Context(), partition)
 	if err != nil {
@@ -131,11 +179,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec := h.engine.Forward(w, r, upstream, h.bodyCapBytes)
+	rec := h.engine.Forward(w, r, upstream, h.bodyCapBytes, action, in)
 	reqStoredBody, reqTrunc, reqTotal := reqCapture.Result()
 
 	h.recordAsync(r.Context(), partition, r, start,
-		reqHeaders, reqStoredBody, reqTrunc, reqTotal, nil,
+		reqHeaders, reqStoredBody, reqTrunc, reqTotal, matchedMockID,
 		domain.DecisionProxied, rec.Status, rec.Headers, rec.Body, rec.BodyTruncated, rec.BodyTotalSize)
 }
 
@@ -143,17 +191,47 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // records it — no upstream is ever contacted for this request. If the mock
 // carries a respond_src script and it fails, this delegates to
 // serveScriptFailedBody instead of writing a partial/zero-value response.
+// If the mock carries a Scenario, the response it's built from is whichever
+// one usecase.ResolveScenarioResponse picks for the slot this call consumes
+// (via AdvanceScenario) — mock.Action.Respond itself is then just a
+// placeholder that satisfied MockCRUD's write-time validation.
 func (h *Handler) serveMocked(
 	w http.ResponseWriter, r *http.Request, partition string, start time.Time,
 	reqHeaders map[string][]string, reqBody io.Reader, reqCapture *cappedCapture,
 	mock domain.Mock, in usecase.MatchInput,
 ) {
+	respondAction := *mock.Action.Respond
+	if mock.Scenario != nil {
+		idx, err := h.scenario.AdvanceScenario(r.Context(), partition, mock.ID)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if mock.Scenario.OnExhaust == domain.OnExhaustFallthrough && idx >= len(mock.Scenario.Responses) {
+			// Lost a race against a concurrent request for this scenario's
+			// last response slot: MatchRequest.Execute's read-only peek (via
+			// ScenarioPeeker) saw this mock as not-yet-exhausted at match
+			// time, but a concurrent request's own AdvanceScenario call
+			// consumed the final slot first, so by the time THIS request's
+			// AdvanceScenario call landed, the mock genuinely is exhausted.
+			// Falling through to spy passthrough here — before the request
+			// body has been drained, so it's still fully forwardable — is
+			// exactly what a live match-time check would have done had it
+			// observed this state, and is what makes fallthrough's
+			// "stop matching once exhausted" guarantee hold under
+			// concurrency, not just for a single request in isolation.
+			h.serveProxied(w, r, partition, start, reqHeaders, reqBody, reqCapture, in, nil, nil)
+			return
+		}
+		respondAction = usecase.ResolveScenarioResponse(*mock.Scenario, idx)
+	}
+
 	// Nothing downstream will read the rest of the body — drain only up to
 	// one byte past the cap, same discipline as serveNotConfigured.
 	_, _ = io.CopyN(io.Discard, reqBody, h.bodyCapBytes+1)
 	reqStoredBody, reqTrunc, reqTotal := reqCapture.Result()
 
-	status, headers, respBody, err := usecase.BuildRespondOutputWithScript(*mock.Action.Respond, mock.Script, in, h.tpl, h.script)
+	status, headers, respBody, err := usecase.BuildRespondOutputWithScript(respondAction, mock.Script, in, h.tpl, h.script)
 	if err != nil {
 		h.serveScriptFailedBody(w, r, partition, start, reqHeaders, reqStoredBody, reqTrunc, reqTotal, mock.ID, "respond", err)
 		return
@@ -185,7 +263,7 @@ func (h *Handler) serveFaulted(
 	_, _ = io.CopyN(io.Discard, reqBody, h.bodyCapBytes+1)
 	reqStoredBody, reqTrunc, reqTotal := reqCapture.Result()
 
-	status := serveFault(w, r, *mock.Action.Fault)
+	status := serveFault(h.serverCtx, w, r, *mock.Action.Fault)
 
 	mockID := mock.ID
 	h.recordAsync(r.Context(), partition, r, start,
@@ -260,6 +338,33 @@ func (h *Handler) serveNotConfigured(
 	h.recordAsync(r.Context(), partition, r, start,
 		reqHeaders, reqStoredBody, reqTrunc, reqTotal, nil,
 		domain.DecisionNotConfigured, http.StatusNotFound,
+		map[string][]string{"Content-Type": {"application/json"}}, respBody, false, int64(len(respBody)))
+}
+
+// serveBlocked writes a 403 for a request whose host isn't in the proxy
+// allow/deny policy (FR-006) — distinct from serveNotConfigured's 404
+// ("nothing is configured for this host"): this is an explicit policy
+// denial, refused before ever attempting to resolve an upstream.
+func (h *Handler) serveBlocked(
+	w http.ResponseWriter, r *http.Request, partition string, start time.Time,
+	reqHeaders map[string][]string, reqBody io.Reader, reqCapture *cappedCapture,
+) {
+	_, _ = io.CopyN(io.Discard, reqBody, h.bodyCapBytes+1)
+	reqStoredBody, reqTrunc, reqTotal := reqCapture.Result()
+
+	// Marshaling a map[string]string literal cannot fail; the error is
+	// deliberately discarded rather than handled.
+	respBody, _ := json.Marshal(map[string]string{
+		"error":   "host_not_allowed",
+		"message": fmt.Sprintf("host %q is not in the proxy allow list for partition %q", r.Host, partition),
+	})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write(respBody)
+
+	h.recordAsync(r.Context(), partition, r, start,
+		reqHeaders, reqStoredBody, reqTrunc, reqTotal, nil,
+		domain.DecisionBlocked, http.StatusForbidden,
 		map[string][]string{"Content-Type": {"application/json"}}, respBody, false, int64(len(respBody)))
 }
 

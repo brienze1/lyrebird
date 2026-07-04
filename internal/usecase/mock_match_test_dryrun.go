@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/brienze1/lyrebird/internal/domain"
 )
@@ -13,15 +14,16 @@ import (
 // upstream lister and no proxy Engine at all, only the same ports
 // MatchRequest uses plus Templater to resolve the winning response.
 type MatchTest struct {
-	repo  MockRepo
-	seeds SeededMockSource
-	match MatchEval
-	tpl   Templater
+	repo     MockRepo
+	seeds    SeededMockSource
+	match    MatchEval
+	tpl      Templater
+	scenario ScenarioPeeker
 }
 
 // NewMatchTest builds a MatchTest use case.
-func NewMatchTest(repo MockRepo, seeds SeededMockSource, match MatchEval, tpl Templater) *MatchTest {
-	return &MatchTest{repo: repo, seeds: seeds, match: match, tpl: tpl}
+func NewMatchTest(repo MockRepo, seeds SeededMockSource, match MatchEval, tpl Templater, scenario ScenarioPeeker) *MatchTest {
+	return &MatchTest{repo: repo, seeds: seeds, match: match, tpl: tpl, scenario: scenario}
 }
 
 // CandidateResult reports one candidate mock's evaluation outcome.
@@ -54,12 +56,25 @@ func (uc *MatchTest) Execute(ctx context.Context, partition string, in MatchInpu
 		matched, conditions := uc.match.Matches(m.Match, in)
 		out.Candidates = append(out.Candidates, CandidateResult{Mock: m, Matched: matched, Conditions: conditions})
 
-		if matched && out.Winner == nil {
-			winner := m
-			out.Winner = &winner
-			if m.Action.Kind == domain.ActionRespond && m.Action.Respond != nil {
-				out.Status, out.Headers, out.Body = BuildRespondOutput(*m.Action.Respond, in, uc.tpl)
-			}
+		if !matched || out.Winner != nil {
+			continue
+		}
+		// A fallthrough scenario mock that's already exhausted would never
+		// actually win a live request (MatchRequest.Execute skips it) — skip
+		// it here too so the dry-run preview doesn't misreport an outcome a
+		// real request wouldn't produce. Purely a read-only peek: MatchTest
+		// still never executes a script or mutates any state.
+		exhausted, err := scenarioExhausted(ctx, uc.scenario, partition, m)
+		if err != nil {
+			return MatchTestOutput{}, fmt.Errorf("usecase: match test: peek scenario: %w", err)
+		}
+		if exhausted {
+			continue
+		}
+		winner := m
+		out.Winner = &winner
+		if m.Action.Kind == domain.ActionRespond && m.Action.Respond != nil {
+			out.Status, out.Headers, out.Body = BuildRespondOutput(*m.Action.Respond, in, uc.tpl)
 		}
 	}
 	return out, nil

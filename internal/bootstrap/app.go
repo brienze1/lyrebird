@@ -47,6 +47,17 @@ type App struct {
 	controlListener net.Listener
 	dataServer      *http.Server
 	controlServer   *http.Server
+
+	// cancelServerCtx cancels the context threaded into proxy.NewHandler
+	// (which a FaultTimeout hang is bound to — see fault.go's serveFault
+	// doc comment). Owned and canceled here, not left to whatever context
+	// the caller of Run happened to pass in, so Shutdown alone is always
+	// sufficient to release an in-flight timeout-fault connection —
+	// otherwise that guarantee would silently depend on caller discipline
+	// invisible at this call site (e.g. cmd/lyrebird/main.go's run() only
+	// works today because it happens to reuse one ctx variable for both
+	// bootstrap.Run and its own shutdown trigger).
+	cancelServerCtx context.CancelFunc
 }
 
 // core is every long-lived resource and use-case shared by both HTTP (Run)
@@ -126,10 +137,10 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 	matchEval := matcher.New()
 	templater := template.New()
 	scriptEngine := scripting.New(cfg.ScriptTimeout)
-	matchRequestUC := usecase.NewMatchRequest(st, sd, matchEval, scriptEngine)
-	matchTestUC := usecase.NewMatchTest(st, sd, matchEval, templater)
-	mockCRUDUC := usecase.NewMockCRUD(st, sd, matchEval, scriptEngine, idgen.UUID{}, clock.System{})
-	resetUC := usecase.NewReset(st, st)
+	matchRequestUC := usecase.NewMatchRequest(st, sd, matchEval, scriptEngine, st)
+	matchTestUC := usecase.NewMatchTest(st, sd, matchEval, templater, st)
+	mockCRUDUC := usecase.NewMockCRUD(st, sd, matchEval, scriptEngine, idgen.UUID{}, clock.System{}, st)
+	resetUC := usecase.NewReset(st, st, st)
 	metricsUC := usecase.NewMetrics(st, clock.System{})
 	promoteTrafficUC := usecase.NewPromoteTraffic(st, mockCRUDUC)
 	createSpaceUC := usecase.NewCreateSpace(st, clock.System{})
@@ -206,10 +217,18 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	controlMux.HandleFunc("DELETE /__lyrebird/spaces/{id}", httpadmin.DeleteSpace(c.deleteSpaceUC))
 	controlMux.Handle("/mcp", mcp.Handler(c.mcpServer))
 
-	proxyEngine := proxy.NewEngine(cfg.UpstreamTimeout)
+	// serverCtx (not the raw ctx Run was called with) is what a FaultTimeout
+	// hang binds to — owned and canceled by App.Shutdown itself, so
+	// Shutdown alone is always sufficient to release an in-flight
+	// timeout-fault connection, regardless of whether/when the caller's own
+	// ctx gets canceled.
+	serverCtx, cancelServerCtx := context.WithCancel(ctx)
+
+	proxyEngine := proxy.NewEngine(cfg.UpstreamTimeout, c.scriptEngine, log)
 	dataHandler := proxy.NewHandler(
-		c.listUpstreamsUC, c.recordTrafficUC, c.matchRequestUC, c.templater, c.scriptEngine,
-		proxyEngine, cfg.BodyCapBytes, clock.System{}, log,
+		serverCtx,
+		c.listUpstreamsUC, c.recordTrafficUC, c.matchRequestUC, c.templater, c.scriptEngine, c.store,
+		proxyEngine, cfg.BodyCapBytes, clock.System{}, log, cfg.AllowProxyHosts,
 	)
 	dataMux := http.NewServeMux()
 	dataMux.Handle("/", dataHandler)
@@ -217,12 +236,14 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	var lc net.ListenConfig
 	dataLn, err := lc.Listen(ctx, "tcp", cfg.DataPlaneAddr)
 	if err != nil {
+		cancelServerCtx()
 		c.gcLoop.Stop()
 		_ = c.store.Close()
 		return nil, fmt.Errorf("bootstrap: listen data plane: %w", err)
 	}
 	controlLn, err := lc.Listen(ctx, "tcp", cfg.ControlPlaneAddr)
 	if err != nil {
+		cancelServerCtx()
 		_ = dataLn.Close()
 		c.gcLoop.Stop()
 		_ = c.store.Close()
@@ -261,6 +282,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 		controlListener: controlLn,
 		dataServer:      dataSrv,
 		controlServer:   controlSrv,
+		cancelServerCtx: cancelServerCtx,
 	}, nil
 }
 
@@ -289,7 +311,14 @@ func (a *App) ControlAddr() string { return a.controlListener.Addr().String() }
 func (a *App) DataAddr() string { return a.dataListener.Addr().String() }
 
 // Shutdown stops the GC loop, both HTTP servers, and closes the store.
+// Canceling cancelServerCtx first releases any in-flight FaultTimeout
+// hijacked connection (see serveFault's doc comment) — Shutdown alone is
+// sufficient for that, independent of whatever context Run's original
+// caller happens to manage on its own.
 func (a *App) Shutdown(ctx context.Context) error {
+	if a.cancelServerCtx != nil {
+		a.cancelServerCtx()
+	}
 	a.GC.Stop()
 	shCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

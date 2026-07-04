@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/brienze1/lyrebird/internal/domain"
 )
@@ -20,15 +21,33 @@ type RespondScriptEval interface {
 // Handler), since that interpretation involves writing an HTTP response,
 // which usecase deliberately stays free of.
 type MatchRequest struct {
-	repo   MockRepo
-	seeds  SeededMockSource
-	match  MatchEval
-	script ScriptEval
+	repo     MockRepo
+	seeds    SeededMockSource
+	match    MatchEval
+	script   ScriptEval
+	scenario ScenarioPeeker
 }
 
 // NewMatchRequest builds a MatchRequest use case.
-func NewMatchRequest(repo MockRepo, seeds SeededMockSource, match MatchEval, script ScriptEval) *MatchRequest {
-	return &MatchRequest{repo: repo, seeds: seeds, match: match, script: script}
+func NewMatchRequest(repo MockRepo, seeds SeededMockSource, match MatchEval, script ScriptEval, scenario ScenarioPeeker) *MatchRequest {
+	return &MatchRequest{repo: repo, seeds: seeds, match: match, script: script, scenario: scenario}
+}
+
+// scenarioExhausted reports whether m's Scenario is a fallthrough scenario
+// whose responses are already used up, per the peeked (not consumed) index
+// — used by MatchRequest.Execute (and MatchTest, for accurate dry-run
+// previews) to skip such a candidate before ever committing to it. repeat_last
+// and wrap scenarios are never "exhausted" in this sense: they always have
+// some valid response to serve, they just pick a different one.
+func scenarioExhausted(ctx context.Context, peek ScenarioPeeker, partition string, m domain.Mock) (bool, error) {
+	if m.Scenario == nil || m.Scenario.OnExhaust != domain.OnExhaustFallthrough {
+		return false, nil
+	}
+	idx, err := peek.ScenarioIndex(ctx, partition, m.ID)
+	if err != nil {
+		return false, err
+	}
+	return idx >= len(m.Scenario.Responses), nil
 }
 
 // Execute returns the first candidate (by priority desc, created_at desc,
@@ -51,6 +70,13 @@ func (uc *MatchRequest) Execute(ctx context.Context, partition string, in MatchI
 	for _, m := range candidates {
 		ok, _ := uc.match.Matches(m.Match, in)
 		if !ok {
+			continue
+		}
+		exhausted, serr := scenarioExhausted(ctx, uc.scenario, partition, m)
+		if serr != nil {
+			return domain.Mock{}, false, fmt.Errorf("usecase: match request: peek scenario: %w", serr)
+		}
+		if exhausted {
 			continue
 		}
 		if m.Script != nil && m.Script.MatchSrc != "" {

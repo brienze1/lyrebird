@@ -101,17 +101,52 @@ func ScriptToDTO(s *domain.Script) *ScriptDTO {
 	return &ScriptDTO{MatchSrc: s.MatchSrc, RespondSrc: s.RespondSrc}
 }
 
+// ScenarioDTO is the wire shape of domain.Scenario.
+type ScenarioDTO struct {
+	Responses []RespondDTO `json:"responses"`
+	OnExhaust string       `json:"on_exhaust,omitempty"`
+}
+
+// ScenarioFromDTO converts a ScenarioDTO to its domain equivalent (nil-safe).
+func ScenarioFromDTO(d *ScenarioDTO) *domain.Scenario {
+	if d == nil {
+		return nil
+	}
+	sc := &domain.Scenario{OnExhaust: domain.OnExhaust(d.OnExhaust)}
+	for _, r := range d.Responses {
+		sc.Responses = append(sc.Responses, domain.RespondAction{
+			Status: r.Status, Headers: r.Headers, Body: []byte(r.Body), Template: r.Template, LatencyMS: r.LatencyMS,
+		})
+	}
+	return sc
+}
+
+// ScenarioToDTO converts a domain.Scenario to its wire equivalent (nil-safe).
+func ScenarioToDTO(s *domain.Scenario) *ScenarioDTO {
+	if s == nil {
+		return nil
+	}
+	d := &ScenarioDTO{OnExhaust: string(s.OnExhaust)}
+	for _, r := range s.Responses {
+		d.Responses = append(d.Responses, RespondDTO{
+			Status: r.Status, Headers: r.Headers, Body: string(r.Body), Template: r.Template, LatencyMS: r.LatencyMS,
+		})
+	}
+	return d
+}
+
 // MockDTO is the wire shape of domain.Mock.
 type MockDTO struct {
-	ID         string     `json:"id,omitempty"`
-	Name       string     `json:"name"`
-	Priority   int        `json:"priority,omitempty"`
-	Group      string     `json:"group,omitempty"`
-	Lifetime   string     `json:"lifetime,omitempty"`
-	TTLSeconds *int       `json:"ttl_seconds,omitempty"`
-	Match      MatchDTO   `json:"match"`
-	Script     *ScriptDTO `json:"script,omitempty"`
-	Action     ActionDTO  `json:"action"`
+	ID         string       `json:"id,omitempty"`
+	Name       string       `json:"name"`
+	Priority   int          `json:"priority,omitempty"`
+	Group      string       `json:"group,omitempty"`
+	Lifetime   string       `json:"lifetime,omitempty"`
+	TTLSeconds *int         `json:"ttl_seconds,omitempty"`
+	Match      MatchDTO     `json:"match"`
+	Script     *ScriptDTO   `json:"script,omitempty"`
+	Action     ActionDTO    `json:"action"`
+	Scenario   *ScenarioDTO `json:"scenario,omitempty"`
 }
 
 // MatcherFromDTO converts a MatcherDTO to its domain equivalent.
@@ -230,6 +265,7 @@ func MockToDTO(m domain.Mock) MockDTO {
 		ID: m.ID, Name: m.Name, Priority: m.Priority, Group: m.Group,
 		Lifetime: string(m.Lifetime), TTLSeconds: m.TTLSeconds,
 		Match: MatchToDTO(m.Match), Script: ScriptToDTO(m.Script), Action: ActionToDTO(m.Action),
+		Scenario: ScenarioToDTO(m.Scenario),
 	}
 }
 
@@ -253,5 +289,6 @@ func MockInputFromDTO(partition string, d MockDTO) (usecase.MockInput, error) {
 	return usecase.MockInput{
 		Partition: partition, Name: d.Name, Priority: d.Priority, Group: d.Group,
 		Match: MatchFromDTO(d.Match), Script: ScriptFromDTO(d.Script), Action: action, TTLSeconds: d.TTLSeconds,
+		Scenario: ScenarioFromDTO(d.Scenario),
 	}, nil
 }

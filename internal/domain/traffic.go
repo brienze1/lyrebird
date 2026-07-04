@@ -15,6 +15,9 @@ const (
 	// respond phase) errored or exceeded its execution timeout — a fail-safe
 	// outcome (FR-016/SC-010), not a hang or a crash.
 	DecisionScriptFailed Decision = "script_failed"
+	// DecisionBlocked records that a request was refused by the proxy
+	// allow/deny host policy (FR-006) before any upstream was contacted.
+	DecisionBlocked Decision = "blocked"
 )
 
 // TrafficRecord is a recorded interaction. Request/Response are encrypted at

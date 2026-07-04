@@ -13,14 +13,17 @@ import (
 type FakeUpstream struct {
 	srv *httptest.Server
 
-	mu              sync.Mutex
-	status          int
-	body            []byte
-	headers         map[string]string
-	hang            time.Duration
-	echo            bool
-	lastReceivedLen int
-	requestCount    int
+	mu                 sync.Mutex
+	status             int
+	body               []byte
+	headers            map[string]string
+	hang               time.Duration
+	echo               bool
+	lastReceivedLen    int
+	requestCount       int
+	lastReceivedMethod string
+	lastReceivedPath   string
+	lastReceivedHeader http.Header
 }
 
 // NewFakeUpstream starts a fake upstream responding 200 with an empty body
@@ -81,9 +84,32 @@ func (f *FakeUpstream) RequestCount() int {
 	return f.requestCount
 }
 
+// LastReceivedPath returns the most recently received request's path —
+// used to assert a rewrite_request script actually changed what reached
+// upstream.
+func (f *FakeUpstream) LastReceivedPath() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastReceivedPath
+}
+
+// LastReceivedHeader returns the most recently received request's value for
+// header name (empty string if absent).
+func (f *FakeUpstream) LastReceivedHeader(name string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lastReceivedHeader == nil {
+		return ""
+	}
+	return f.lastReceivedHeader.Get(name)
+}
+
 func (f *FakeUpstream) handle(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.requestCount++
+	f.lastReceivedMethod = r.Method
+	f.lastReceivedPath = r.URL.Path
+	f.lastReceivedHeader = r.Header.Clone()
 	hang, echo, status, body, headers := f.hang, f.echo, f.status, f.body, f.headers
 	f.mu.Unlock()
 
