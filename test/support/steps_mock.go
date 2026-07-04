@@ -52,11 +52,17 @@ type actionDTO struct {
 	Respond *respondDTO `json:"respond,omitempty"`
 }
 
+type scriptDTO struct {
+	MatchSrc   string `json:"match_src,omitempty"`
+	RespondSrc string `json:"respond_src,omitempty"`
+}
+
 type mockDTO struct {
-	Name     string    `json:"name"`
-	Priority int       `json:"priority"`
-	Match    matchDTO  `json:"match"`
-	Action   actionDTO `json:"action"`
+	Name     string     `json:"name"`
+	Priority int        `json:"priority"`
+	Match    matchDTO   `json:"match"`
+	Script   *scriptDTO `json:"script,omitempty"`
+	Action   actionDTO  `json:"action"`
 }
 
 type matchTestResponseDTO struct {

@@ -79,16 +79,39 @@ type ActionDTO struct {
 	Fault   *FaultDTO   `json:"fault,omitempty"`
 }
 
+// ScriptDTO is the wire shape of domain.Script.
+type ScriptDTO struct {
+	MatchSrc   string `json:"match_src,omitempty"`
+	RespondSrc string `json:"respond_src,omitempty"`
+}
+
+// ScriptFromDTO converts a ScriptDTO to its domain equivalent (nil-safe).
+func ScriptFromDTO(d *ScriptDTO) *domain.Script {
+	if d == nil {
+		return nil
+	}
+	return &domain.Script{MatchSrc: d.MatchSrc, RespondSrc: d.RespondSrc}
+}
+
+// ScriptToDTO converts a domain.Script to its wire equivalent (nil-safe).
+func ScriptToDTO(s *domain.Script) *ScriptDTO {
+	if s == nil {
+		return nil
+	}
+	return &ScriptDTO{MatchSrc: s.MatchSrc, RespondSrc: s.RespondSrc}
+}
+
 // MockDTO is the wire shape of domain.Mock.
 type MockDTO struct {
-	ID         string    `json:"id,omitempty"`
-	Name       string    `json:"name"`
-	Priority   int       `json:"priority,omitempty"`
-	Group      string    `json:"group,omitempty"`
-	Lifetime   string    `json:"lifetime,omitempty"`
-	TTLSeconds *int      `json:"ttl_seconds,omitempty"`
-	Match      MatchDTO  `json:"match"`
-	Action     ActionDTO `json:"action"`
+	ID         string     `json:"id,omitempty"`
+	Name       string     `json:"name"`
+	Priority   int        `json:"priority,omitempty"`
+	Group      string     `json:"group,omitempty"`
+	Lifetime   string     `json:"lifetime,omitempty"`
+	TTLSeconds *int       `json:"ttl_seconds,omitempty"`
+	Match      MatchDTO   `json:"match"`
+	Script     *ScriptDTO `json:"script,omitempty"`
+	Action     ActionDTO  `json:"action"`
 }
 
 // MatcherFromDTO converts a MatcherDTO to its domain equivalent.
@@ -206,7 +229,7 @@ func MockToDTO(m domain.Mock) MockDTO {
 	return MockDTO{
 		ID: m.ID, Name: m.Name, Priority: m.Priority, Group: m.Group,
 		Lifetime: string(m.Lifetime), TTLSeconds: m.TTLSeconds,
-		Match: MatchToDTO(m.Match), Action: ActionToDTO(m.Action),
+		Match: MatchToDTO(m.Match), Script: ScriptToDTO(m.Script), Action: ActionToDTO(m.Action),
 	}
 }
 
@@ -229,6 +252,6 @@ func MockInputFromDTO(partition string, d MockDTO) (usecase.MockInput, error) {
 	}
 	return usecase.MockInput{
 		Partition: partition, Name: d.Name, Priority: d.Priority, Group: d.Group,
-		Match: MatchFromDTO(d.Match), Action: action, TTLSeconds: d.TTLSeconds,
+		Match: MatchFromDTO(d.Match), Script: ScriptFromDTO(d.Script), Action: action, TTLSeconds: d.TTLSeconds,
 	}, nil
 }

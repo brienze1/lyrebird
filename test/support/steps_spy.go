@@ -297,6 +297,9 @@ func RegisterSpySteps(sc *godog.ScenarioContext, s *appState) {
 
 	sc.Step(`^the response status is (\d+)$`, t.theResponseStatusIs)
 	sc.Step(`^the response body is "([^"]*)"$`, t.theResponseBodyIs)
+	// Single-quote variant for asserting a JSON response body, whose own
+	// double quotes would otherwise need escaping.
+	sc.Step(`^the response body is '(.*)'$`, t.theResponseBodyIs)
 	sc.Step(`^the response body contains "([^"]*)"$`, t.theResponseBodyContains)
 	sc.Step(`^the response header "([^"]*)" is "([^"]*)"$`, t.theResponseHeaderIs)
 	sc.Step(`^the fake upstream received a body of (\d+) bytes$`, t.theFakeUpstreamReceivedABodyOfBytes)

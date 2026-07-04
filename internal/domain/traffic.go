@@ -11,6 +11,10 @@ const (
 	DecisionProxied       Decision = "proxied"
 	DecisionFaulted       Decision = "faulted"
 	DecisionNotConfigured Decision = "not_configured"
+	// DecisionScriptFailed records that a mock's sandboxed script (match or
+	// respond phase) errored or exceeded its execution timeout — a fail-safe
+	// outcome (FR-016/SC-010), not a hang or a crash.
+	DecisionScriptFailed Decision = "script_failed"
 )
 
 // TrafficRecord is a recorded interaction. Request/Response are encrypted at

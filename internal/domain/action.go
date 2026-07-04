@@ -31,8 +31,10 @@ type RespondAction struct {
 }
 
 // ProxyAction forwards to the resolved Upstream. The rewrite/transform
-// scripts hold JS source executed by goja starting at M4; M0 only needs the
-// field to exist and round-trip.
+// scripts are intended to hold JS source executed by goja, but remain
+// unimplemented — out of scope for M4 (which only wires up Mock.Script's
+// match_src/respond_src, not these proxy-action-level fields); only the
+// field needs to exist and round-trip for now.
 type ProxyAction struct {
 	RewriteRequestScript    *string
 	TransformResponseScript *string

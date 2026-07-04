@@ -21,6 +21,7 @@ import (
 	"github.com/brienze1/lyrebird/internal/adapters/matcher"
 	"github.com/brienze1/lyrebird/internal/adapters/mcp"
 	"github.com/brienze1/lyrebird/internal/adapters/proxy"
+	"github.com/brienze1/lyrebird/internal/adapters/scripting"
 	"github.com/brienze1/lyrebird/internal/adapters/template"
 	"github.com/brienze1/lyrebird/internal/infra/clock"
 	"github.com/brienze1/lyrebird/internal/infra/config"
@@ -70,6 +71,7 @@ type core struct {
 	metricsUC        *usecase.Metrics
 	promoteTrafficUC *usecase.PromoteTraffic
 	templater        usecase.Templater
+	scriptEngine     *scripting.Engine
 
 	mcpServer *sdkmcp.Server
 }
@@ -119,9 +121,10 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 
 	matchEval := matcher.New()
 	templater := template.New()
-	matchRequestUC := usecase.NewMatchRequest(st, sd, matchEval)
+	scriptEngine := scripting.New(cfg.ScriptTimeout)
+	matchRequestUC := usecase.NewMatchRequest(st, sd, matchEval, scriptEngine)
 	matchTestUC := usecase.NewMatchTest(st, sd, matchEval, templater)
-	mockCRUDUC := usecase.NewMockCRUD(st, sd, matchEval, idgen.UUID{}, clock.System{})
+	mockCRUDUC := usecase.NewMockCRUD(st, sd, matchEval, scriptEngine, idgen.UUID{}, clock.System{})
 	resetUC := usecase.NewReset(st, st)
 	metricsUC := usecase.NewMetrics(st, clock.System{})
 	promoteTrafficUC := usecase.NewPromoteTraffic(st, mockCRUDUC)
@@ -146,7 +149,7 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 		recordTrafficUC: recordTrafficUC, listTrafficUC: listTrafficUC, getTrafficUC: getTrafficUC,
 		clearTrafficUC: clearTrafficUC, matchRequestUC: matchRequestUC, matchTestUC: matchTestUC,
 		mockCRUDUC: mockCRUDUC, resetUC: resetUC, metricsUC: metricsUC, promoteTrafficUC: promoteTrafficUC,
-		templater: templater, mcpServer: mcpServer,
+		templater: templater, scriptEngine: scriptEngine, mcpServer: mcpServer,
 	}, nil
 }
 
@@ -182,7 +185,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 
 	proxyEngine := proxy.NewEngine(cfg.UpstreamTimeout)
 	dataHandler := proxy.NewHandler(
-		c.listUpstreamsUC, c.recordTrafficUC, c.matchRequestUC, c.templater,
+		c.listUpstreamsUC, c.recordTrafficUC, c.matchRequestUC, c.templater, c.scriptEngine,
 		proxyEngine, cfg.BodyCapBytes, clock.System{}, log,
 	)
 	dataMux := http.NewServeMux()
