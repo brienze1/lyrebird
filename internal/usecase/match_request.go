@@ -6,6 +6,13 @@ import (
 	"github.com/brienze1/lyrebird/internal/domain"
 )
 
+// RespondScriptEval is the subset of ScriptEval BuildRespondOutputWithScript
+// needs — named at the point of use so a caller (the proxy Handler) can
+// depend on just this, not the full ScriptEval surface.
+type RespondScriptEval interface {
+	EvalRespond(src string, in MatchInput) ([]byte, error)
+}
+
 // MatchRequest resolves which mock, if any, applies to an inbound request
 // (FR-009/009a). It only decides WHICH mock wins — interpreting the winning
 // mock's Action.Kind (respond directly, inject a fault, or fall through to
@@ -13,28 +20,49 @@ import (
 // Handler), since that interpretation involves writing an HTTP response,
 // which usecase deliberately stays free of.
 type MatchRequest struct {
-	repo  MockRepo
-	seeds SeededMockSource
-	match MatchEval
+	repo   MockRepo
+	seeds  SeededMockSource
+	match  MatchEval
+	script ScriptEval
 }
 
 // NewMatchRequest builds a MatchRequest use case.
-func NewMatchRequest(repo MockRepo, seeds SeededMockSource, match MatchEval) *MatchRequest {
-	return &MatchRequest{repo: repo, seeds: seeds, match: match}
+func NewMatchRequest(repo MockRepo, seeds SeededMockSource, match MatchEval, script ScriptEval) *MatchRequest {
+	return &MatchRequest{repo: repo, seeds: seeds, match: match, script: script}
 }
 
 // Execute returns the first candidate (by priority desc, created_at desc,
 // id asc — FR-009a) whose Match conditions all hold against in, and true.
-// If none match, it returns the zero Mock and false.
+// If a candidate's declarative Match passes but it also carries a
+// Script.MatchSrc, that script is evaluated as an additional AND-composed
+// gate (FR-014's "and/or": a script narrows, it doesn't replace, static
+// matching) — cheaper-first ordering, since a candidate whose declarative
+// Match never passes is never sandboxed at all. A script error stops the
+// search immediately (fails safe) rather than falling through to a
+// lower-priority candidate — the caller (proxy Handler) is expected to
+// synthesize a safe error response for a returned *ScriptError, never
+// silently continue as if this mock hadn't matched.
+// If no mock matches, it returns the zero Mock and false.
 func (uc *MatchRequest) Execute(ctx context.Context, partition string, in MatchInput) (domain.Mock, bool, error) {
 	candidates, err := loadSortedCandidates(ctx, uc.repo, uc.seeds, partition)
 	if err != nil {
 		return domain.Mock{}, false, err
 	}
 	for _, m := range candidates {
-		if ok, _ := uc.match.Matches(m.Match, in); ok {
-			return m, true, nil
+		ok, _ := uc.match.Matches(m.Match, in)
+		if !ok {
+			continue
 		}
+		if m.Script != nil && m.Script.MatchSrc != "" {
+			sok, serr := uc.script.EvalMatch(m.Script.MatchSrc, in)
+			if serr != nil {
+				return m, false, &ScriptError{MockID: m.ID, Phase: "match", Err: serr}
+			}
+			if !sok {
+				continue
+			}
+		}
+		return m, true, nil
 	}
 	return domain.Mock{}, false, nil
 }
@@ -42,7 +70,11 @@ func (uc *MatchRequest) Execute(ctx context.Context, partition string, in MatchI
 // BuildRespondOutput resolves a matched mock's RespondAction into concrete
 // status/headers/body, applying Templater rendering only when the action
 // opts in (Template == true) — otherwise body/headers are used verbatim,
-// exactly as authored.
+// exactly as authored. Used by MatchTest, which deliberately never
+// evaluates a mock's Script (running a potentially-hanging agent-authored
+// script as a side effect of a "safe dry-run preview" would defeat the
+// point of match_test) — the live data-plane path uses
+// BuildRespondOutputWithScript instead.
 func BuildRespondOutput(action domain.RespondAction, in MatchInput, tpl Templater) (status int, headers map[string]string, body []byte) {
 	status = action.Status
 	if status == 0 {
@@ -54,4 +86,31 @@ func BuildRespondOutput(action domain.RespondAction, in MatchInput, tpl Template
 		headers = tpl.RenderHeaders(headers, in)
 	}
 	return status, headers, body
+}
+
+// BuildRespondOutputWithScript is BuildRespondOutput's script-aware sibling,
+// used only by the live data-plane path. When script.RespondSrc is set it
+// takes over Body only — Status/Headers/LatencyMS still come from action,
+// per data-model.md's own wording that a script may build the body "or"
+// templating may, not both — a mock combining Template:true and a
+// non-empty RespondSrc is not a supported/tested configuration; RespondSrc
+// silently wins. A non-nil error return means script evaluation failed and
+// the caller MUST fail safe (synthesize an error response, record
+// DecisionScriptFailed) rather than serve a partial/zero-value response.
+func BuildRespondOutputWithScript(
+	action domain.RespondAction, script *domain.Script, in MatchInput, tpl Templater, se RespondScriptEval,
+) (status int, headers map[string]string, body []byte, err error) {
+	if script != nil && script.RespondSrc != "" {
+		status = action.Status
+		if status == 0 {
+			status = 200
+		}
+		body, err = se.EvalRespond(script.RespondSrc, in)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		return status, action.Headers, body, nil
+	}
+	status, headers, body = BuildRespondOutput(action, in, tpl)
+	return status, headers, body, nil
 }

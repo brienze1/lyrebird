@@ -30,6 +30,10 @@ type Config struct {
 	SeedDir         string
 	GCInterval      time.Duration
 	UpstreamTimeout time.Duration
+	// ScriptTimeout bounds a mock's sandboxed match_src/respond_src script
+	// execution (FR-016) — a misbehaving script is interrupted and treated
+	// as a fail-safe failure, never left to hang.
+	ScriptTimeout time.Duration
 	// MCPStdio, when true, makes the process serve MCP over stdin/stdout
 	// only (no HTTP listeners) instead of running the normal HTTP daemon —
 	// the local-agent transport mode (contracts/mcp-tools.md).
@@ -60,6 +64,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.UpstreamTimeout, err = parseDuration("LYREBIRD_UPSTREAM_TIMEOUT", "10s"); err != nil {
+		return Config{}, err
+	}
+	if cfg.ScriptTimeout, err = parseDuration("LYREBIRD_SCRIPT_TIMEOUT", "100ms"); err != nil {
 		return Config{}, err
 	}
 	if cfg.BodyCapBytes, err = parsePositiveInt64("LYREBIRD_BODY_CAP_BYTES", 1<<20); err != nil {

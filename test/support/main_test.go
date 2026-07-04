@@ -36,4 +36,5 @@ func InitializeScenario(ctx *godog.ScenarioContext) {
 	RegisterSpySteps(ctx, s)
 	RegisterMockSteps(ctx, s)
 	RegisterMcpSteps(ctx, s)
+	RegisterScriptingSteps(ctx, s)
 }

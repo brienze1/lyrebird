@@ -96,9 +96,20 @@ type fakeClock struct{ t time.Time }
 
 func (f *fakeClock) Now() time.Time { return f.t }
 
+type fakeScriptEval struct{ invalid bool }
+
+func (f *fakeScriptEval) ValidateScript(src string) error {
+	if src != "" && f.invalid {
+		return domain.ErrInvalidMock
+	}
+	return nil
+}
+func (f *fakeScriptEval) EvalMatch(_ string, _ MatchInput) (bool, error)     { return true, nil }
+func (f *fakeScriptEval) EvalRespond(_ string, _ MatchInput) ([]byte, error) { return nil, nil }
+
 func newCRUD() (*MockCRUD, *fakeSeededSource) {
 	seeds := &fakeSeededSource{}
-	uc := NewMockCRUD(newFakeMockRepo(), seeds, &fakeMatchEval{}, &fakeIDGen{}, &fakeClock{t: time.Unix(1000, 0)})
+	uc := NewMockCRUD(newFakeMockRepo(), seeds, &fakeMatchEval{}, &fakeScriptEval{}, &fakeIDGen{}, &fakeClock{t: time.Unix(1000, 0)})
 	return uc, seeds
 }
 
@@ -135,10 +146,32 @@ func TestMockCRUDCreateRejectsMismatchedActionKind(t *testing.T) {
 
 func TestMockCRUDCreateRejectsInvalidMatch(t *testing.T) {
 	repo := newFakeMockRepo()
-	uc := NewMockCRUD(repo, &fakeSeededSource{}, &fakeMatchEval{invalid: true}, &fakeIDGen{}, &fakeClock{t: time.Unix(0, 0)})
+	uc := NewMockCRUD(repo, &fakeSeededSource{}, &fakeMatchEval{invalid: true}, &fakeScriptEval{}, &fakeIDGen{}, &fakeClock{t: time.Unix(0, 0)})
 	_, err := uc.Create(context.Background(), MockInput{Partition: "default", Name: "x", Action: respondAction(200)})
 	if !errors.Is(err, domain.ErrInvalidMock) {
 		t.Fatalf("Create() with an invalid Match = %v, want ErrInvalidMock", err)
+	}
+}
+
+func TestMockCRUDCreateRejectsInvalidScript(t *testing.T) {
+	repo := newFakeMockRepo()
+	uc := NewMockCRUD(repo, &fakeSeededSource{}, &fakeMatchEval{}, &fakeScriptEval{invalid: true}, &fakeIDGen{}, &fakeClock{t: time.Unix(0, 0)})
+	_, err := uc.Create(context.Background(), MockInput{
+		Partition: "default", Name: "x", Script: &domain.Script{RespondSrc: "this is not valid js"}, Action: respondAction(200),
+	})
+	if !errors.Is(err, domain.ErrInvalidMock) {
+		t.Fatalf("Create() with an invalid Script = %v, want ErrInvalidMock", err)
+	}
+}
+
+func TestMockCRUDCreateAcceptsNilScript(t *testing.T) {
+	uc, _ := newCRUD()
+	m, err := uc.Create(context.Background(), MockInput{Partition: "default", Name: "x", Action: respondAction(200)})
+	if err != nil {
+		t.Fatalf("Create(): %v", err)
+	}
+	if m.Script != nil {
+		t.Errorf("Script = %+v, want nil", m.Script)
 	}
 }
 

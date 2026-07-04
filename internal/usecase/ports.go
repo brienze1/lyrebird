@@ -5,6 +5,7 @@ package usecase
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/brienze1/lyrebird/internal/domain"
@@ -148,3 +149,41 @@ type Templater interface {
 type SeededMockSource interface {
 	SeededMocks(partition string) []domain.Mock
 }
+
+// ScriptEval evaluates a domain.Script's match_src/respond_src hooks inside
+// a sandboxed JS VM against a MatchInput. A port for the same reason as
+// MatchEval/Templater: usecase cannot import internal/adapters/scripting
+// (Clean Architecture's inward-only dependency rule); the concrete
+// implementation lives there.
+type ScriptEval interface {
+	// ValidateScript reports whether src compiles as well-formed JS, without
+	// executing it — mirrors MatchEval.ValidateMatch's write-time-not-
+	// first-match-time contract. src == "" is always valid (no-op).
+	ValidateScript(src string) error
+	// EvalMatch runs match_src and reports whether the mock should be
+	// considered matched (JS truthiness of the last-evaluated expression).
+	// A non-nil error means the script itself misbehaved (threw, timed out,
+	// or exceeded the call-stack bound) — callers MUST treat this as a
+	// fail-safe condition (FR-016/SC-010), never as "didn't match".
+	EvalMatch(src string, in MatchInput) (bool, error)
+	// EvalRespond runs respond_src and returns the response body it
+	// produced: a returned JS string is used as raw bytes verbatim;
+	// anything else JSON-encodable is JSON-marshaled. Same fail-safe error
+	// contract as EvalMatch.
+	EvalRespond(src string, in MatchInput) ([]byte, error)
+}
+
+// ScriptError wraps a ScriptEval failure (match or respond phase) with the
+// mock it belongs to, so callers can record it as traffic (FR-016/SC-010)
+// instead of only logging and returning a generic internal error.
+type ScriptError struct {
+	MockID string
+	Phase  string // "match" | "respond"
+	Err    error
+}
+
+func (e *ScriptError) Error() string {
+	return fmt.Sprintf("usecase: mock %q script (%s) failed: %v", e.MockID, e.Phase, e.Err)
+}
+
+func (e *ScriptError) Unwrap() error { return e.Err }
