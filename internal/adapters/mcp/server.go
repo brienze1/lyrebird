@@ -58,6 +58,18 @@ type promoteTrafficPort interface {
 	Execute(ctx context.Context, in usecase.PromoteTrafficInput) (domain.Mock, error)
 }
 
+type createSpacePort interface {
+	Execute(ctx context.Context, p domain.Partition) (domain.Partition, error)
+}
+
+type listSpacesPort interface {
+	Execute(ctx context.Context) ([]domain.Partition, error)
+}
+
+type deleteSpacePort interface {
+	Execute(ctx context.Context, id string) error
+}
+
 // Deps is every use-case (interface-shaped, matching httpadmin's own
 // constructor-injection convention) a tool handler needs, collected into
 // one struct because mcp.AddTool registers eagerly against one *Server at
@@ -76,6 +88,9 @@ type Deps struct {
 	ClearTraffic   clearTrafficPort
 	Metrics        metricsPort
 	PromoteTraffic promoteTrafficPort
+	CreateSpace    createSpacePort
+	ListSpaces     listSpacesPort
+	DeleteSpace    deleteSpacePort
 }
 
 // New builds one fully-registered MCP server — every tool in
@@ -89,6 +104,7 @@ func New(deps Deps) *sdkmcp.Server {
 	registerMockTools(s, deps)
 	registerUpstreamTools(s, deps)
 	registerTrafficTools(s, deps)
+	registerSpaceTools(s, deps)
 	registerContentTools(s)
 	return s
 }

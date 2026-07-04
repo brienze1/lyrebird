@@ -37,4 +37,5 @@ func InitializeScenario(ctx *godog.ScenarioContext) {
 	RegisterMockSteps(ctx, s)
 	RegisterMcpSteps(ctx, s)
 	RegisterScriptingSteps(ctx, s)
+	RegisterPartitionSteps(ctx, s)
 }

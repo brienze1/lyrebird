@@ -23,6 +23,7 @@ import (
 	"github.com/brienze1/lyrebird/internal/adapters/proxy"
 	"github.com/brienze1/lyrebird/internal/adapters/scripting"
 	"github.com/brienze1/lyrebird/internal/adapters/template"
+	"github.com/brienze1/lyrebird/internal/domain"
 	"github.com/brienze1/lyrebird/internal/infra/clock"
 	"github.com/brienze1/lyrebird/internal/infra/config"
 	"github.com/brienze1/lyrebird/internal/infra/crypto"
@@ -70,6 +71,9 @@ type core struct {
 	resetUC          *usecase.Reset
 	metricsUC        *usecase.Metrics
 	promoteTrafficUC *usecase.PromoteTraffic
+	createSpaceUC    *usecase.CreateSpace
+	listSpacesUC     *usecase.ListSpaces
+	deleteSpaceUC    *usecase.DeleteSpace
 	templater        usecase.Templater
 	scriptEngine     *scripting.Engine
 
@@ -128,6 +132,18 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 	resetUC := usecase.NewReset(st, st)
 	metricsUC := usecase.NewMetrics(st, clock.System{})
 	promoteTrafficUC := usecase.NewPromoteTraffic(st, mockCRUDUC)
+	createSpaceUC := usecase.NewCreateSpace(st, clock.System{})
+	listSpacesUC := usecase.NewListSpaces(st)
+	deleteSpaceUC := usecase.NewDeleteSpace(st)
+
+	// The default space is always implicitly active (every request/mock/
+	// upstream falls back to it) and can never be deleted, so it's
+	// registered here rather than left invisible to list_spaces until
+	// something explicitly calls create_space for it.
+	if _, err := createSpaceUC.Execute(ctx, domain.Partition{ID: domain.DefaultPartitionID}); err != nil {
+		_ = st.Close()
+		return nil, fmt.Errorf("bootstrap: register default space: %w", err)
+	}
 
 	mcpServer := mcp.New(mcp.Deps{
 		DefaultSpace:   cfg.DefaultSpace,
@@ -141,6 +157,9 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 		ClearTraffic:   clearTrafficUC,
 		Metrics:        metricsUC,
 		PromoteTraffic: promoteTrafficUC,
+		CreateSpace:    createSpaceUC,
+		ListSpaces:     listSpacesUC,
+		DeleteSpace:    deleteSpaceUC,
 	})
 
 	return &core{
@@ -149,6 +168,7 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 		recordTrafficUC: recordTrafficUC, listTrafficUC: listTrafficUC, getTrafficUC: getTrafficUC,
 		clearTrafficUC: clearTrafficUC, matchRequestUC: matchRequestUC, matchTestUC: matchTestUC,
 		mockCRUDUC: mockCRUDUC, resetUC: resetUC, metricsUC: metricsUC, promoteTrafficUC: promoteTrafficUC,
+		createSpaceUC: createSpaceUC, listSpacesUC: listSpacesUC, deleteSpaceUC: deleteSpaceUC,
 		templater: templater, scriptEngine: scriptEngine, mcpServer: mcpServer,
 	}, nil
 }
@@ -181,6 +201,9 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	controlMux.HandleFunc("DELETE /__lyrebird/mocks/{id}", httpadmin.DeleteMock(c.mockCRUDUC))
 	controlMux.HandleFunc("POST /__lyrebird/match-test", httpadmin.MatchTest(c.matchTestUC))
 	controlMux.HandleFunc("POST /__lyrebird/reset", httpadmin.Reset(c.resetUC))
+	controlMux.HandleFunc("GET /__lyrebird/spaces", httpadmin.ListSpaces(c.listSpacesUC))
+	controlMux.HandleFunc("POST /__lyrebird/spaces", httpadmin.CreateSpace(c.createSpaceUC))
+	controlMux.HandleFunc("DELETE /__lyrebird/spaces/{id}", httpadmin.DeleteSpace(c.deleteSpaceUC))
 	controlMux.Handle("/mcp", mcp.Handler(c.mcpServer))
 
 	proxyEngine := proxy.NewEngine(cfg.UpstreamTimeout)
