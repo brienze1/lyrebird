@@ -14,9 +14,12 @@ import (
 	"net/http"
 	"time"
 
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/brienze1/lyrebird/internal/adapters/httpadmin"
 	"github.com/brienze1/lyrebird/internal/adapters/httpmw"
 	"github.com/brienze1/lyrebird/internal/adapters/matcher"
+	"github.com/brienze1/lyrebird/internal/adapters/mcp"
 	"github.com/brienze1/lyrebird/internal/adapters/proxy"
 	"github.com/brienze1/lyrebird/internal/adapters/template"
 	"github.com/brienze1/lyrebird/internal/infra/clock"
@@ -44,11 +47,39 @@ type App struct {
 	controlServer   *http.Server
 }
 
-// Run resolves the at-rest key, opens the store, loads seeds, starts the GC
-// loop, and starts both listeners. It never fails on a missing, empty,
-// wrong-key, or corrupt database file (FR-029) — only a genuine
-// infrastructure failure (e.g. disk permissions) returns an error here.
-func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error) {
+// core is every long-lived resource and use-case shared by both HTTP (Run)
+// and stdio (RunStdio) modes — built exactly once so tool registration and
+// use-case wiring can never drift between the two MCP transports
+// (constitution Principle II).
+type core struct {
+	sealer crypto.Sealer
+	store  *store.Store
+	seeds  seeds.Seeds
+	gcLoop *gc.Loop
+
+	setUpstreamUC    *usecase.SetUpstream
+	listUpstreamsUC  *usecase.ListUpstreams
+	recordTrafficUC  *usecase.RecordTraffic
+	listTrafficUC    *usecase.ListTraffic
+	getTrafficUC     *usecase.GetTraffic
+	clearTrafficUC   *usecase.ClearTraffic
+	matchRequestUC   *usecase.MatchRequest
+	matchTestUC      *usecase.MatchTest
+	mockCRUDUC       *usecase.MockCRUD
+	resetUC          *usecase.Reset
+	metricsUC        *usecase.Metrics
+	promoteTrafficUC *usecase.PromoteTraffic
+	templater        usecase.Templater
+
+	mcpServer *sdkmcp.Server
+}
+
+// buildCore resolves the at-rest key, opens the store, loads seeds, starts
+// the GC loop, and constructs every use-case plus the one MCP server both
+// Run and RunStdio need. It never fails on a missing, empty, wrong-key, or
+// corrupt database file (FR-029) — only a genuine infrastructure failure
+// (e.g. disk permissions) returns an error here.
+func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core, error) {
 	key, source, err := crypto.ResolveKey(cfg.DataKeyB64)
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: resolve key: %w", err)
@@ -79,39 +110,79 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	gcLoop := gc.New(cfg.GCInterval, cfg.TrafficTTL, st, log)
 	gcLoop.Start(ctx)
 
-	readiness := &httpadmin.Readiness{}
-	partitionMW := httpmw.Partition(cfg.DefaultSpace)
-
 	setUpstreamUC := usecase.NewSetUpstream(st)
 	listUpstreamsUC := usecase.NewListUpstreams(st)
 	recordTrafficUC := usecase.NewRecordTraffic(st, clock.System{}, idgen.UUID{})
 	listTrafficUC := usecase.NewListTraffic(st)
 	getTrafficUC := usecase.NewGetTraffic(st)
+	clearTrafficUC := usecase.NewClearTraffic(st)
 
 	matchEval := matcher.New()
 	templater := template.New()
 	matchRequestUC := usecase.NewMatchRequest(st, sd, matchEval)
 	matchTestUC := usecase.NewMatchTest(st, sd, matchEval, templater)
 	mockCRUDUC := usecase.NewMockCRUD(st, sd, matchEval, idgen.UUID{}, clock.System{})
+	resetUC := usecase.NewReset(st, st)
+	metricsUC := usecase.NewMetrics(st, clock.System{})
+	promoteTrafficUC := usecase.NewPromoteTraffic(st, mockCRUDUC)
+
+	mcpServer := mcp.New(mcp.Deps{
+		DefaultSpace:   cfg.DefaultSpace,
+		MockCRUD:       mockCRUDUC,
+		Reset:          resetUC,
+		MatchTest:      matchTestUC,
+		SetUpstream:    setUpstreamUC,
+		ListUpstreams:  listUpstreamsUC,
+		ListTraffic:    listTrafficUC,
+		GetTraffic:     getTrafficUC,
+		ClearTraffic:   clearTrafficUC,
+		Metrics:        metricsUC,
+		PromoteTraffic: promoteTrafficUC,
+	})
+
+	return &core{
+		sealer: sealer, store: st, seeds: sd, gcLoop: gcLoop,
+		setUpstreamUC: setUpstreamUC, listUpstreamsUC: listUpstreamsUC,
+		recordTrafficUC: recordTrafficUC, listTrafficUC: listTrafficUC, getTrafficUC: getTrafficUC,
+		clearTrafficUC: clearTrafficUC, matchRequestUC: matchRequestUC, matchTestUC: matchTestUC,
+		mockCRUDUC: mockCRUDUC, resetUC: resetUC, metricsUC: metricsUC, promoteTrafficUC: promoteTrafficUC,
+		templater: templater, mcpServer: mcpServer,
+	}, nil
+}
+
+// Run builds the core, then starts the data-plane and control-plane HTTP
+// listeners (Admin REST + the MCP Streamable HTTP handler, both on the
+// control plane). The data plane is intentionally never authenticated
+// (FR-030).
+func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error) {
+	c, err := buildCore(ctx, cfg, log)
+	if err != nil {
+		return nil, err
+	}
+
+	readiness := &httpadmin.Readiness{}
+	partitionMW := httpmw.Partition(cfg.DefaultSpace)
 
 	controlMux := http.NewServeMux()
 	controlMux.HandleFunc("GET /__lyrebird/healthz", httpadmin.Healthz)
 	controlMux.HandleFunc("GET /__lyrebird/readyz", httpadmin.Readyz(readiness))
-	controlMux.HandleFunc("GET /__lyrebird/upstreams", httpadmin.ListUpstreams(listUpstreamsUC))
-	controlMux.HandleFunc("POST /__lyrebird/upstreams", httpadmin.SetUpstream(setUpstreamUC))
-	controlMux.HandleFunc("GET /__lyrebird/traffic", httpadmin.ListTraffic(listTrafficUC))
-	controlMux.HandleFunc("GET /__lyrebird/traffic/{id}", httpadmin.GetTraffic(getTrafficUC))
-	controlMux.HandleFunc("GET /__lyrebird/mocks", httpadmin.ListMocks(mockCRUDUC))
-	controlMux.HandleFunc("POST /__lyrebird/mocks", httpadmin.CreateMock(mockCRUDUC))
-	controlMux.HandleFunc("GET /__lyrebird/mocks/{id}", httpadmin.GetMock(mockCRUDUC))
-	controlMux.HandleFunc("PUT /__lyrebird/mocks/{id}", httpadmin.UpdateMock(mockCRUDUC))
-	controlMux.HandleFunc("DELETE /__lyrebird/mocks/{id}", httpadmin.DeleteMock(mockCRUDUC))
-	controlMux.HandleFunc("POST /__lyrebird/match-test", httpadmin.MatchTest(matchTestUC))
+	controlMux.HandleFunc("GET /__lyrebird/upstreams", httpadmin.ListUpstreams(c.listUpstreamsUC))
+	controlMux.HandleFunc("POST /__lyrebird/upstreams", httpadmin.SetUpstream(c.setUpstreamUC))
+	controlMux.HandleFunc("GET /__lyrebird/traffic", httpadmin.ListTraffic(c.listTrafficUC))
+	controlMux.HandleFunc("GET /__lyrebird/traffic/{id}", httpadmin.GetTraffic(c.getTrafficUC))
+	controlMux.HandleFunc("POST /__lyrebird/traffic/{id}/promote", httpadmin.PromoteTraffic(c.promoteTrafficUC))
+	controlMux.HandleFunc("GET /__lyrebird/mocks", httpadmin.ListMocks(c.mockCRUDUC))
+	controlMux.HandleFunc("POST /__lyrebird/mocks", httpadmin.CreateMock(c.mockCRUDUC))
+	controlMux.HandleFunc("GET /__lyrebird/mocks/{id}", httpadmin.GetMock(c.mockCRUDUC))
+	controlMux.HandleFunc("PUT /__lyrebird/mocks/{id}", httpadmin.UpdateMock(c.mockCRUDUC))
+	controlMux.HandleFunc("DELETE /__lyrebird/mocks/{id}", httpadmin.DeleteMock(c.mockCRUDUC))
+	controlMux.HandleFunc("POST /__lyrebird/match-test", httpadmin.MatchTest(c.matchTestUC))
+	controlMux.HandleFunc("POST /__lyrebird/reset", httpadmin.Reset(c.resetUC))
+	controlMux.Handle("/mcp", mcp.Handler(c.mcpServer))
 
-	// The data plane is intentionally never authenticated (FR-030).
 	proxyEngine := proxy.NewEngine(cfg.UpstreamTimeout)
 	dataHandler := proxy.NewHandler(
-		listUpstreamsUC, recordTrafficUC, matchRequestUC, templater,
+		c.listUpstreamsUC, c.recordTrafficUC, c.matchRequestUC, c.templater,
 		proxyEngine, cfg.BodyCapBytes, clock.System{}, log,
 	)
 	dataMux := http.NewServeMux()
@@ -120,15 +191,15 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	var lc net.ListenConfig
 	dataLn, err := lc.Listen(ctx, "tcp", cfg.DataPlaneAddr)
 	if err != nil {
-		gcLoop.Stop()
-		_ = st.Close()
+		c.gcLoop.Stop()
+		_ = c.store.Close()
 		return nil, fmt.Errorf("bootstrap: listen data plane: %w", err)
 	}
 	controlLn, err := lc.Listen(ctx, "tcp", cfg.ControlPlaneAddr)
 	if err != nil {
 		_ = dataLn.Close()
-		gcLoop.Stop()
-		_ = st.Close()
+		c.gcLoop.Stop()
+		_ = c.store.Close()
 		return nil, fmt.Errorf("bootstrap: listen control plane: %w", err)
 	}
 
@@ -155,16 +226,33 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 
 	return &App{
 		Config:          cfg,
-		Sealer:          sealer,
-		Store:           st,
-		Seeds:           sd,
-		GC:              gcLoop,
+		Sealer:          c.sealer,
+		Store:           c.store,
+		Seeds:           c.seeds,
+		GC:              c.gcLoop,
 		Readiness:       readiness,
 		dataListener:    dataLn,
 		controlListener: controlLn,
 		dataServer:      dataSrv,
 		controlServer:   controlSrv,
 	}, nil
+}
+
+// RunStdio builds the core and serves MCP over stdin/stdout only — no HTTP
+// listeners are bound. Mutually exclusive with Run in the same process
+// invocation (contracts/mcp-tools.md's "stdio (local)" transport mode);
+// cmd/lyrebird/main.go picks one or the other based on cfg.MCPStdio. Blocks
+// until ctx is done or the stdio transport closes.
+func RunStdio(ctx context.Context, cfg config.Config, log *slog.Logger) error {
+	c, err := buildCore(ctx, cfg, log)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		c.gcLoop.Stop()
+		_ = c.store.Close()
+	}()
+	return mcp.RunStdio(ctx, c.mcpServer)
 }
 
 // ControlAddr returns the actual address the control-plane listener is bound

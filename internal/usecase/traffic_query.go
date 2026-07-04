@@ -31,3 +31,14 @@ func NewGetTraffic(repo TrafficRepo) *GetTraffic { return &GetTraffic{repo: repo
 func (uc *GetTraffic) Execute(ctx context.Context, partition, id string) (domain.TrafficRecord, error) {
 	return uc.repo.GetTraffic(ctx, partition, id)
 }
+
+// ClearTraffic deletes every recorded traffic entry in a partition (FR-027/28).
+type ClearTraffic struct{ repo TrafficRepo }
+
+// NewClearTraffic builds a ClearTraffic use case.
+func NewClearTraffic(repo TrafficRepo) *ClearTraffic { return &ClearTraffic{repo: repo} }
+
+// Execute deletes every recorded traffic entry in partition.
+func (uc *ClearTraffic) Execute(ctx context.Context, partition string) error {
+	return uc.repo.ClearTraffic(ctx, partition)
+}

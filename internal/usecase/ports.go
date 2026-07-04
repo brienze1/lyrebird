@@ -18,6 +18,12 @@ type TrafficFilter struct {
 	Status     *int
 	Since      *time.Time
 	Until      *time.Time
+	// Limit bounds the number of rows returned (0 = unbounded). Applied at
+	// the SQL layer (a genuine LIMIT, not fetch-all-then-slice) since traffic
+	// volume, unlike mock count, can be large. Applied before the per-row
+	// decrypt-or-skip check (FR-029), so a caller asking for Limit=20 can
+	// legitimately get fewer than 20 rows back — not an off-by-one bug.
+	Limit int
 }
 
 // MockRepo persists ephemeral mocks. Seeded mocks never pass through it —

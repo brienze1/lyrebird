@@ -12,6 +12,14 @@ import (
 type fakeTrafficRepo struct {
 	appended  []domain.TrafficRecord
 	appendErr error
+
+	getResult  domain.TrafficRecord
+	getErr     error
+	listResult []domain.TrafficRecord
+	listFilter TrafficFilter // captures the last filter passed to ListTraffic
+
+	cleared         []string // partitions ClearTraffic was called with
+	clearTrafficErr error
 }
 
 func (f *fakeTrafficRepo) AppendTraffic(_ context.Context, t domain.TrafficRecord) error {
@@ -22,15 +30,28 @@ func (f *fakeTrafficRepo) AppendTraffic(_ context.Context, t domain.TrafficRecor
 	return nil
 }
 func (f *fakeTrafficRepo) GetTraffic(_ context.Context, _, _ string) (domain.TrafficRecord, error) {
-	return domain.TrafficRecord{}, domain.ErrNotFound
+	if f.getErr != nil {
+		return domain.TrafficRecord{}, f.getErr
+	}
+	if f.getResult.ID == "" {
+		return domain.TrafficRecord{}, domain.ErrNotFound
+	}
+	return f.getResult, nil
 }
-func (f *fakeTrafficRepo) ListTraffic(_ context.Context, _ string, _ TrafficFilter) ([]domain.TrafficRecord, error) {
-	return nil, nil
+func (f *fakeTrafficRepo) ListTraffic(_ context.Context, _ string, filter TrafficFilter) ([]domain.TrafficRecord, error) {
+	f.listFilter = filter
+	return f.listResult, nil
 }
 func (f *fakeTrafficRepo) PruneTraffic(_ context.Context, _ time.Time) (int, error) {
 	return 0, nil
 }
-func (f *fakeTrafficRepo) ClearTraffic(_ context.Context, _ string) error { return nil }
+func (f *fakeTrafficRepo) ClearTraffic(_ context.Context, partition string) error {
+	if f.clearTrafficErr != nil {
+		return f.clearTrafficErr
+	}
+	f.cleared = append(f.cleared, partition)
+	return nil
+}
 
 type fixedClock struct{ t time.Time }
 

@@ -111,13 +111,24 @@ func (uc *MockCRUD) Get(ctx context.Context, partition, id string) (domain.Mock,
 	return domain.Mock{}, domain.ErrNotFound
 }
 
-// List returns every mock in partition — ephemeral and seeded together.
-func (uc *MockCRUD) List(ctx context.Context, partition string) ([]domain.Mock, error) {
+// List returns every mock in partition — ephemeral and seeded together —
+// optionally filtered to one group (group == "" means no filter).
+func (uc *MockCRUD) List(ctx context.Context, partition, group string) ([]domain.Mock, error) {
 	ephemeral, err := uc.repo.ListMocks(ctx, partition)
 	if err != nil {
 		return nil, fmt.Errorf("usecase: list mocks: %w", err)
 	}
-	return append(ephemeral, uc.seeds.SeededMocks(partition)...), nil
+	all := append(append([]domain.Mock{}, ephemeral...), uc.seeds.SeededMocks(partition)...)
+	if group == "" {
+		return all, nil
+	}
+	filtered := make([]domain.Mock, 0, len(all))
+	for _, m := range all {
+		if m.Group == group {
+			filtered = append(filtered, m)
+		}
+	}
+	return filtered, nil
 }
 
 // Update validates and overwrites an existing ephemeral mock's mutable

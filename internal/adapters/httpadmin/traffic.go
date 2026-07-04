@@ -2,54 +2,16 @@ package httpadmin
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/brienze1/lyrebird/internal/adapters/dto"
 	"github.com/brienze1/lyrebird/internal/adapters/httpmw"
 	"github.com/brienze1/lyrebird/internal/domain"
 	"github.com/brienze1/lyrebird/internal/usecase"
 )
-
-type trafficSummaryDTO struct {
-	ID            string  `json:"id"`
-	Timestamp     string  `json:"timestamp"`
-	Method        string  `json:"method"`
-	Host          string  `json:"host"`
-	Path          string  `json:"path"`
-	Status        int     `json:"status"`
-	LatencyMS     int     `json:"latency_ms"`
-	Decision      string  `json:"decision"`
-	MatchedMockID *string `json:"matched_mock_id,omitempty"`
-}
-
-type recordedMessageDTO struct {
-	Headers       map[string][]string `json:"headers"`
-	Body          []byte              `json:"body"`
-	BodyTruncated bool                `json:"body_truncated"`
-	BodyTotalSize int64               `json:"body_total_size"`
-}
-
-type trafficDetailDTO struct {
-	trafficSummaryDTO
-	Request  recordedMessageDTO `json:"request"`
-	Response recordedMessageDTO `json:"response"`
-}
-
-func toSummaryDTO(t domain.TrafficRecord) trafficSummaryDTO {
-	return trafficSummaryDTO{
-		ID: t.ID, Timestamp: t.Timestamp.UTC().Format(time.RFC3339Nano),
-		Method: t.Method, Host: t.Host, Path: t.Path,
-		Status: t.Status, LatencyMS: t.LatencyMS, Decision: string(t.Decision),
-		MatchedMockID: t.MatchedMockID,
-	}
-}
-
-func toRecordedMessageDTO(m usecase.RecordedMessage) recordedMessageDTO {
-	return recordedMessageDTO{Headers: m.Headers, Body: m.Body, BodyTruncated: m.BodyTruncated, BodyTotalSize: m.BodyTotalSize}
-}
 
 type listTrafficUseCase interface {
 	Execute(ctx context.Context, partition string, filter usecase.TrafficFilter) ([]domain.TrafficRecord, error)
@@ -60,7 +22,7 @@ type getTrafficUseCase interface {
 }
 
 // ListTraffic handles GET /__lyrebird/traffic (contracts/admin-rest.md).
-// Query params: method, host, path_prefix, status, since, until (RFC3339).
+// Query params: method, host, path_prefix, status, since, until (RFC3339), limit.
 func ListTraffic(uc listTrafficUseCase) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		partition := httpmw.PartitionFromContext(r.Context())
@@ -72,12 +34,12 @@ func ListTraffic(uc listTrafficUseCase) http.HandlerFunc {
 
 		list, err := uc.Execute(r.Context(), partition, filter)
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err)
+			writeUseCaseError(w, err)
 			return
 		}
-		out := make([]trafficSummaryDTO, len(list))
+		out := make([]dto.TrafficSummaryDTO, len(list))
 		for i, t := range list {
-			out[i] = toSummaryDTO(t)
+			out[i] = dto.TrafficToSummaryDTO(t)
 		}
 		writeJSON(w, http.StatusOK, out)
 	}
@@ -90,12 +52,8 @@ func GetTraffic(uc getTrafficUseCase) http.HandlerFunc {
 		id := r.PathValue("id")
 
 		t, err := uc.Execute(r.Context(), partition, id)
-		if errors.Is(err, domain.ErrNotFound) {
-			writeJSONError(w, http.StatusNotFound, err)
-			return
-		}
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err)
+			writeUseCaseError(w, err)
 			return
 		}
 
@@ -110,10 +68,10 @@ func GetTraffic(uc getTrafficUseCase) http.HandlerFunc {
 			return
 		}
 
-		writeJSON(w, http.StatusOK, trafficDetailDTO{
-			trafficSummaryDTO: toSummaryDTO(t),
-			Request:           toRecordedMessageDTO(req),
-			Response:          toRecordedMessageDTO(resp),
+		writeJSON(w, http.StatusOK, dto.TrafficDetailDTO{
+			TrafficSummaryDTO: dto.TrafficToSummaryDTO(t),
+			Request:           dto.RecordedMessageToDTO(req),
+			Response:          dto.RecordedMessageToDTO(resp),
 		})
 	}
 }
@@ -146,6 +104,13 @@ func parseTrafficFilter(r *http.Request) (usecase.TrafficFilter, error) {
 			return usecase.TrafficFilter{}, fmt.Errorf("invalid query parameter until=%q", raw)
 		}
 		filter.Until = &until
+	}
+	if raw := q.Get("limit"); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil {
+			return usecase.TrafficFilter{}, fmt.Errorf("invalid query parameter limit=%q", raw)
+		}
+		filter.Limit = limit
 	}
 	return filter, nil
 }
