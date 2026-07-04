@@ -9,6 +9,49 @@ import (
 	"github.com/brienze1/lyrebird/internal/domain"
 )
 
+// fakeScenarioStateRepo is a minimal in-memory ScenarioStateRepo/ScenarioPeeker
+// shared across this package's tests — always reports "not exhausted" and
+// tracks Reset*/AdvanceScenario calls only insofar as tests need to assert
+// on them.
+type fakeScenarioStateRepo struct {
+	indexes map[string]int // key: partition+"/"+mockID
+}
+
+func (f *fakeScenarioStateRepo) key(partition, mockID string) string { return partition + "/" + mockID }
+
+func (f *fakeScenarioStateRepo) ScenarioIndex(_ context.Context, partition, mockID string) (int, error) {
+	if f.indexes == nil {
+		return 0, nil
+	}
+	return f.indexes[f.key(partition, mockID)], nil
+}
+
+func (f *fakeScenarioStateRepo) AdvanceScenario(_ context.Context, partition, mockID string) (int, error) {
+	if f.indexes == nil {
+		f.indexes = map[string]int{}
+	}
+	k := f.key(partition, mockID)
+	idx := f.indexes[k]
+	f.indexes[k] = idx + 1
+	return idx, nil
+}
+
+func (f *fakeScenarioStateRepo) ResetScenario(_ context.Context, partition, mockID string) error {
+	if f.indexes != nil {
+		delete(f.indexes, f.key(partition, mockID))
+	}
+	return nil
+}
+
+func (f *fakeScenarioStateRepo) ResetAllScenarios(_ context.Context, partition string) error {
+	for k := range f.indexes {
+		if len(k) > len(partition) && k[:len(partition)+1] == partition+"/" {
+			delete(f.indexes, k)
+		}
+	}
+	return nil
+}
+
 type fakeMockRepo struct {
 	mocks map[string]domain.Mock // key: partition+"/"+id
 }
@@ -106,10 +149,16 @@ func (f *fakeScriptEval) ValidateScript(src string) error {
 }
 func (f *fakeScriptEval) EvalMatch(_ string, _ MatchInput) (bool, error)     { return true, nil }
 func (f *fakeScriptEval) EvalRespond(_ string, _ MatchInput) ([]byte, error) { return nil, nil }
+func (f *fakeScriptEval) EvalRewriteRequest(_ string, _ MatchInput) (RewrittenRequest, error) {
+	return RewrittenRequest{}, nil
+}
+func (f *fakeScriptEval) EvalTransformResponse(_ string, _ TransformInput) (TransformedResponse, error) {
+	return TransformedResponse{}, nil
+}
 
 func newCRUD() (*MockCRUD, *fakeSeededSource) {
 	seeds := &fakeSeededSource{}
-	uc := NewMockCRUD(newFakeMockRepo(), seeds, &fakeMatchEval{}, &fakeScriptEval{}, &fakeIDGen{}, &fakeClock{t: time.Unix(1000, 0)})
+	uc := NewMockCRUD(newFakeMockRepo(), seeds, &fakeMatchEval{}, &fakeScriptEval{}, &fakeIDGen{}, &fakeClock{t: time.Unix(1000, 0)}, &fakeScenarioStateRepo{})
 	return uc, seeds
 }
 
@@ -146,7 +195,7 @@ func TestMockCRUDCreateRejectsMismatchedActionKind(t *testing.T) {
 
 func TestMockCRUDCreateRejectsInvalidMatch(t *testing.T) {
 	repo := newFakeMockRepo()
-	uc := NewMockCRUD(repo, &fakeSeededSource{}, &fakeMatchEval{invalid: true}, &fakeScriptEval{}, &fakeIDGen{}, &fakeClock{t: time.Unix(0, 0)})
+	uc := NewMockCRUD(repo, &fakeSeededSource{}, &fakeMatchEval{invalid: true}, &fakeScriptEval{}, &fakeIDGen{}, &fakeClock{t: time.Unix(0, 0)}, &fakeScenarioStateRepo{})
 	_, err := uc.Create(context.Background(), MockInput{Partition: "default", Name: "x", Action: respondAction(200)})
 	if !errors.Is(err, domain.ErrInvalidMock) {
 		t.Fatalf("Create() with an invalid Match = %v, want ErrInvalidMock", err)
@@ -155,7 +204,7 @@ func TestMockCRUDCreateRejectsInvalidMatch(t *testing.T) {
 
 func TestMockCRUDCreateRejectsInvalidScript(t *testing.T) {
 	repo := newFakeMockRepo()
-	uc := NewMockCRUD(repo, &fakeSeededSource{}, &fakeMatchEval{}, &fakeScriptEval{invalid: true}, &fakeIDGen{}, &fakeClock{t: time.Unix(0, 0)})
+	uc := NewMockCRUD(repo, &fakeSeededSource{}, &fakeMatchEval{}, &fakeScriptEval{invalid: true}, &fakeIDGen{}, &fakeClock{t: time.Unix(0, 0)}, &fakeScenarioStateRepo{})
 	_, err := uc.Create(context.Background(), MockInput{
 		Partition: "default", Name: "x", Script: &domain.Script{RespondSrc: "this is not valid js"}, Action: respondAction(200),
 	})
@@ -172,6 +221,95 @@ func TestMockCRUDCreateAcceptsNilScript(t *testing.T) {
 	}
 	if m.Script != nil {
 		t.Errorf("Script = %+v, want nil", m.Script)
+	}
+}
+
+func TestMockCRUDCreateRejectsScenarioOnNonRespondAction(t *testing.T) {
+	uc, _ := newCRUD()
+	_, err := uc.Create(context.Background(), MockInput{
+		Partition: "default", Name: "x", Action: domain.Action{Kind: domain.ActionFault, Fault: &domain.FaultAction{Kind: domain.FaultDelay}},
+		Scenario: &domain.Scenario{Responses: []domain.RespondAction{{Body: []byte("x")}}},
+	})
+	if !errors.Is(err, domain.ErrInvalidMock) {
+		t.Fatalf("Create() with a scenario on a non-respond action = %v, want ErrInvalidMock", err)
+	}
+}
+
+func TestMockCRUDCreateRejectsEmptyScenarioResponses(t *testing.T) {
+	uc, _ := newCRUD()
+	_, err := uc.Create(context.Background(), MockInput{
+		Partition: "default", Name: "x", Action: respondAction(200), Scenario: &domain.Scenario{},
+	})
+	if !errors.Is(err, domain.ErrInvalidMock) {
+		t.Fatalf("Create() with an empty scenario.responses = %v, want ErrInvalidMock", err)
+	}
+}
+
+func TestMockCRUDCreateDefaultsEmptyOnExhaustToRepeatLast(t *testing.T) {
+	uc, _ := newCRUD()
+	m, err := uc.Create(context.Background(), MockInput{
+		Partition: "default", Name: "x", Action: respondAction(200),
+		Scenario: &domain.Scenario{Responses: []domain.RespondAction{{Body: []byte("x")}}},
+	})
+	if err != nil {
+		t.Fatalf("Create(): %v", err)
+	}
+	if m.Scenario == nil || m.Scenario.OnExhaust != domain.OnExhaustRepeatLast {
+		t.Errorf("Scenario.OnExhaust = %+v, want %q", m.Scenario, domain.OnExhaustRepeatLast)
+	}
+}
+
+func TestMockCRUDUpdateResetsScenarioState(t *testing.T) {
+	repo := newFakeMockRepo()
+	scenario := &fakeScenarioStateRepo{}
+	uc := NewMockCRUD(repo, &fakeSeededSource{}, &fakeMatchEval{}, &fakeScriptEval{}, &fakeIDGen{}, &fakeClock{t: time.Unix(0, 0)}, scenario)
+
+	created, err := uc.Create(context.Background(), MockInput{
+		Partition: "default", Name: "seq", Action: respondAction(200),
+		Scenario: &domain.Scenario{Responses: []domain.RespondAction{{Body: []byte("one")}, {Body: []byte("two")}}},
+	})
+	if err != nil {
+		t.Fatalf("Create(): %v", err)
+	}
+	if _, err := scenario.AdvanceScenario(context.Background(), "default", created.ID); err != nil {
+		t.Fatalf("AdvanceScenario(): %v", err)
+	}
+	if idx, _ := scenario.ScenarioIndex(context.Background(), "default", created.ID); idx == 0 {
+		t.Fatalf("scenario index = %d, want a nonzero index before Update", idx)
+	}
+
+	if _, err := uc.Update(context.Background(), "default", created.ID, MockInput{
+		Partition: "default", Name: "seq", Action: respondAction(200),
+		Scenario: &domain.Scenario{Responses: []domain.RespondAction{{Body: []byte("one")}, {Body: []byte("two")}}},
+	}); err != nil {
+		t.Fatalf("Update(): %v", err)
+	}
+	if idx, _ := scenario.ScenarioIndex(context.Background(), "default", created.ID); idx != 0 {
+		t.Errorf("scenario index after Update = %d, want 0 (reset)", idx)
+	}
+}
+
+func TestMockCRUDDeleteResetsScenarioState(t *testing.T) {
+	repo := newFakeMockRepo()
+	scenario := &fakeScenarioStateRepo{}
+	uc := NewMockCRUD(repo, &fakeSeededSource{}, &fakeMatchEval{}, &fakeScriptEval{}, &fakeIDGen{}, &fakeClock{t: time.Unix(0, 0)}, scenario)
+
+	created, err := uc.Create(context.Background(), MockInput{
+		Partition: "default", Name: "seq", Action: respondAction(200),
+		Scenario: &domain.Scenario{Responses: []domain.RespondAction{{Body: []byte("one")}}},
+	})
+	if err != nil {
+		t.Fatalf("Create(): %v", err)
+	}
+	if _, err := scenario.AdvanceScenario(context.Background(), "default", created.ID); err != nil {
+		t.Fatalf("AdvanceScenario(): %v", err)
+	}
+
+	if err := uc.Delete(context.Background(), "default", created.ID); err != nil {
+		t.Fatalf("Delete(): %v", err)
+	}
+	if len(scenario.indexes) != 0 {
+		t.Errorf("scenario.indexes = %v, want empty after Delete", scenario.indexes)
 	}
 }
 

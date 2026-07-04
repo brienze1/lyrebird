@@ -33,6 +33,7 @@ func (t *spyState) newFakeUpstream() *FakeUpstream {
 	fu := NewFakeUpstream()
 	t.fakeUpstreams = append(t.fakeUpstreams, fu)
 	t.lastFakeUpstream = fu
+	t.s.lastFakeUpstream = fu
 	return fu
 }
 

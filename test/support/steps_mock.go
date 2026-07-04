@@ -48,8 +48,21 @@ type respondDTO struct {
 	Body   string `json:"body"`
 }
 
+type proxyDTO struct {
+	RewriteRequestScript    *string `json:"rewrite_request,omitempty"`
+	TransformResponseScript *string `json:"transform_response,omitempty"`
+	LatencyMS               *int    `json:"latency_ms,omitempty"`
+}
+
+type faultDTO struct {
+	Kind    string `json:"kind"`
+	DelayMS *int   `json:"delay_ms,omitempty"`
+}
+
 type actionDTO struct {
 	Respond *respondDTO `json:"respond,omitempty"`
+	Proxy   *proxyDTO   `json:"proxy,omitempty"`
+	Fault   *faultDTO   `json:"fault,omitempty"`
 }
 
 type scriptDTO struct {
@@ -57,13 +70,19 @@ type scriptDTO struct {
 	RespondSrc string `json:"respond_src,omitempty"`
 }
 
+type scenarioDTO struct {
+	Responses []respondDTO `json:"responses"`
+	OnExhaust string       `json:"on_exhaust,omitempty"`
+}
+
 type mockDTO struct {
-	Name       string     `json:"name"`
-	Priority   int        `json:"priority"`
-	Match      matchDTO   `json:"match"`
-	Script     *scriptDTO `json:"script,omitempty"`
-	Action     actionDTO  `json:"action"`
-	TTLSeconds *int       `json:"ttl_seconds,omitempty"`
+	Name       string       `json:"name"`
+	Priority   int          `json:"priority"`
+	Match      matchDTO     `json:"match"`
+	Script     *scriptDTO   `json:"script,omitempty"`
+	Action     actionDTO    `json:"action"`
+	Scenario   *scenarioDTO `json:"scenario,omitempty"`
+	TTLSeconds *int         `json:"ttl_seconds,omitempty"`
 }
 
 type matchTestResponseDTO struct {

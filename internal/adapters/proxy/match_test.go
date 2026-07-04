@@ -61,3 +61,33 @@ func TestResolveUpstreamPrefersLongerGlobOnTie(t *testing.T) {
 		t.Fatalf("ResolveUpstream() = %+v, %v, want the longer/more specific glob to win", got, ok)
 	}
 }
+
+func TestHostAllowedWithEmptyListAllowsEverything(t *testing.T) {
+	if !HostAllowed(nil, "anything.example.com") {
+		t.Error("HostAllowed(nil, ...) = false, want true (empty list means allow all)")
+	}
+}
+
+func TestHostAllowedExactMatch(t *testing.T) {
+	if !HostAllowed([]string{"example.local"}, "example.local") {
+		t.Error("HostAllowed() = false, want true for an exact match")
+	}
+}
+
+func TestHostAllowedGlobMatch(t *testing.T) {
+	if !HostAllowed([]string{"*.example.com"}, "api.example.com") {
+		t.Error("HostAllowed() = false, want true for a glob match")
+	}
+}
+
+func TestHostAllowedStripsPortAndLowercases(t *testing.T) {
+	if !HostAllowed([]string{"Example.LOCAL"}, "example.local:8080") {
+		t.Error("HostAllowed() = false, want a case-insensitive, port-stripped match")
+	}
+}
+
+func TestHostAllowedRejectsUnlistedHost(t *testing.T) {
+	if HostAllowed([]string{"example.local"}, "other.local") {
+		t.Error("HostAllowed() = true, want false for a host not in the list")
+	}
+}

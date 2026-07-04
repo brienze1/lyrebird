@@ -16,7 +16,7 @@ func TestResetRemovesEphemeralMocksAndReportsCount(t *testing.T) {
 		t.Fatalf("CreateMock(): %v", err)
 	}
 	traffic := &fakeTrafficRepo{}
-	uc := NewReset(repo, traffic)
+	uc := NewReset(repo, traffic, &fakeScenarioStateRepo{})
 
 	out, err := uc.Execute(context.Background(), ResetInput{Partition: "default"})
 	if err != nil {
@@ -39,7 +39,7 @@ func TestResetRemovesEphemeralMocksAndReportsCount(t *testing.T) {
 func TestResetOptionallyClearsTraffic(t *testing.T) {
 	repo := newFakeMockRepo()
 	traffic := &fakeTrafficRepo{}
-	uc := NewReset(repo, traffic)
+	uc := NewReset(repo, traffic, &fakeScenarioStateRepo{})
 
 	out, err := uc.Execute(context.Background(), ResetInput{Partition: "default", ClearTraffic: true})
 	if err != nil {
@@ -50,5 +50,22 @@ func TestResetOptionallyClearsTraffic(t *testing.T) {
 	}
 	if len(traffic.cleared) != 1 || traffic.cleared[0] != "default" {
 		t.Errorf("traffic.cleared = %v, want [\"default\"]", traffic.cleared)
+	}
+}
+
+func TestResetRestartsScenarioSequences(t *testing.T) {
+	repo := newFakeMockRepo()
+	traffic := &fakeTrafficRepo{}
+	scenario := &fakeScenarioStateRepo{indexes: map[string]int{"default/seq": 3, "other/seq": 1}}
+	uc := NewReset(repo, traffic, scenario)
+
+	if _, err := uc.Execute(context.Background(), ResetInput{Partition: "default"}); err != nil {
+		t.Fatalf("Execute(): %v", err)
+	}
+	if idx, _ := scenario.ScenarioIndex(context.Background(), "default", "seq"); idx != 0 {
+		t.Errorf("default/seq index after Reset = %d, want 0", idx)
+	}
+	if idx, _ := scenario.ScenarioIndex(context.Background(), "other", "seq"); idx != 1 {
+		t.Errorf("other/seq index after resetting a different partition = %d, want untouched 1", idx)
 	}
 }

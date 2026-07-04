@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cucumber/godog"
@@ -38,6 +39,14 @@ type appState struct {
 	bodyCapBytes    int64
 	gcInterval      time.Duration
 	trafficTTL      time.Duration
+	allowProxyHosts []string
+
+	// lastFakeUpstream mirrors spyState's own private field of the same
+	// name, set by RegisterSpySteps's newFakeUpstream — exposed here so
+	// other Register*Steps files (e.g. steps_advanced_proxy.go) can assert
+	// on what the most recently created fake upstream actually received,
+	// without steps_spy.go needing to export its whole state struct.
+	lastFakeUpstream *FakeUpstream
 
 	app     *bootstrap.App
 	bootErr error
@@ -100,6 +109,11 @@ func (s *appState) theTrafficTTLIsConfiguredTo(d string) error {
 	return nil
 }
 
+func (s *appState) theAllowedProxyHostsAreConfiguredTo(csv string) error {
+	s.allowProxyHosts = strings.Split(csv, ",")
+	return nil
+}
+
 func (s *appState) bootWithDataKey(ctx context.Context, dataKeyB64 string) error {
 	upstreamTimeout := s.upstreamTimeout
 	if upstreamTimeout == 0 {
@@ -130,6 +144,7 @@ func (s *appState) bootWithDataKey(ctx context.Context, dataKeyB64 string) error
 		SeedDir:          s.seedDir,
 		GCInterval:       gcInterval,
 		DataKeyB64:       dataKeyB64,
+		AllowProxyHosts:  s.allowProxyHosts,
 	}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -176,6 +191,7 @@ func RegisterCoreAppSteps(sc *godog.ScenarioContext, s *appState) {
 	sc.Step(`^the body cap is configured to "(\d+)" bytes$`, s.bodyCapIsConfiguredToBytes)
 	sc.Step(`^the GC interval is configured to "([^"]*)"$`, s.theGCIntervalIsConfiguredTo)
 	sc.Step(`^the traffic TTL is configured to "([^"]*)"$`, s.theTrafficTTLIsConfiguredTo)
+	sc.Step(`^the allowed proxy hosts are configured to "([^"]*)"$`, s.theAllowedProxyHostsAreConfiguredTo)
 	sc.Step(`^Lyrebird boots$`, s.lyrebirdBoots)
 	sc.Step(`^Lyrebird boots with data key "([^"]*)"$`, s.lyrebirdBootsWithDataKey)
 	sc.Step(`^boot succeeds$`, s.bootSucceeds)

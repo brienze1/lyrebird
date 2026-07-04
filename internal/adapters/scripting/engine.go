@@ -90,16 +90,48 @@ func (e *Engine) EvalRespond(src string, in usecase.MatchInput) ([]byte, error) 
 	return valueToBody(v)
 }
 
+// EvalRewriteRequest runs src (rewrite_request) and reports which parts of
+// the outbound request it changed.
+func (e *Engine) EvalRewriteRequest(src string, in usecase.MatchInput) (usecase.RewrittenRequest, error) {
+	v, err := e.run(src, in)
+	if err != nil {
+		return usecase.RewrittenRequest{}, err
+	}
+	return jsValueToRewrite(v)
+}
+
+// EvalTransformResponse runs src (transform_response) against the real
+// upstream response and reports which parts it changed.
+func (e *Engine) EvalTransformResponse(src string, in usecase.TransformInput) (usecase.TransformedResponse, error) {
+	v, err := e.runWithGlobals(src, func(vm *goja.Runtime) {
+		_ = vm.Set("req", reqToJS(in.Req))
+		_ = vm.Set("resp", respToJS(in))
+	})
+	if err != nil {
+		return usecase.TransformedResponse{}, err
+	}
+	return jsValueToTransform(v)
+}
+
 var errScriptTimeout = errors.New("script exceeded execution timeout")
 
-// run builds a fresh Runtime (see the Engine doc comment for why it isn't
-// pooled), sets req, and executes src bounded by e.timeout. Because the
+// run is runWithGlobals's common case: only the "req" global set from in.
+func (e *Engine) run(src string, in usecase.MatchInput) (goja.Value, error) {
+	return e.runWithGlobals(src, func(vm *goja.Runtime) {
+		_ = vm.Set("req", reqToJS(in))
+	})
+}
+
+// runWithGlobals builds a fresh Runtime (see the Engine doc comment for why
+// it isn't pooled), lets setGlobals install whatever globals this
+// evaluation needs (req alone for match/respond/rewrite, req+resp for
+// transform_response), and executes src bounded by e.timeout. Because the
 // Runtime is discarded immediately after this single use, there is no
 // "next caller" a delayed Interrupt() could ever poison — the interrupt
 // timer is simply stopped best-effort on the way out.
-func (e *Engine) run(src string, in usecase.MatchInput) (goja.Value, error) {
+func (e *Engine) runWithGlobals(src string, setGlobals func(*goja.Runtime)) (goja.Value, error) {
 	vm := newRuntime()
-	_ = vm.Set("req", reqToJS(in))
+	setGlobals(vm)
 
 	timer := time.AfterFunc(e.timeout, func() { vm.Interrupt(errScriptTimeout) })
 	v, err := vm.RunString(src)

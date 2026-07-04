@@ -30,6 +30,25 @@ func ResolveUpstream(upstreams []domain.Upstream, requestHost string) (domain.Up
 	return best, found
 }
 
+// HostAllowed reports whether requestHost may be proxied under the
+// LYREBIRD_ALLOW_PROXY_HOSTS policy (FR-006). An empty allowHosts means
+// "allow every host" — today's de-facto behavior, preserved (constitution
+// Principle V: a security feature activates only once the operator
+// explicitly configures it). A non-empty list is an allowlist matched with
+// the exact same glob convention as Upstream.MatchHost, for consistency.
+func HostAllowed(allowHosts []string, requestHost string) bool {
+	if len(allowHosts) == 0 {
+		return true
+	}
+	host := strings.ToLower(hostOnly(requestHost))
+	for _, pattern := range allowHosts {
+		if ok, err := path.Match(strings.ToLower(pattern), host); err == nil && ok {
+			return true
+		}
+	}
+	return false
+}
+
 func hostOnly(hostHeader string) string {
 	if h, _, err := net.SplitHostPort(hostHeader); err == nil {
 		return h
