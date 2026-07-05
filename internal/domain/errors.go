@@ -41,4 +41,8 @@ var (
 	// documented sentinel meaning "unbounded" and is never rejected — only
 	// values with no legitimate meaning are.
 	ErrInvalidTrafficFilter = errors.New("lyrebird: invalid traffic filter")
+
+	// ErrInvalidClientKey is returned when client_key matches none of the
+	// accepted LYREBIRD_AUTH_KEYS (FR-033).
+	ErrInvalidClientKey = errors.New("lyrebird: invalid client key")
 )

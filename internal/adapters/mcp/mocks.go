@@ -105,6 +105,8 @@ func kindTag(k usecase.ErrorKind) string {
 		return "not_found"
 	case usecase.KindConflict:
 		return "conflict"
+	case usecase.KindUnauthorized:
+		return "unauthorized"
 	default:
 		return "internal"
 	}

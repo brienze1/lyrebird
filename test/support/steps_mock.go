@@ -111,6 +111,9 @@ func createMockDTO(ctx context.Context, s *appState, dto mockDTO) error {
 		return fmt.Errorf("build create-mock request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if s.lastIssuedToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.lastIssuedToken)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("POST /__lyrebird/mocks: %w", err)

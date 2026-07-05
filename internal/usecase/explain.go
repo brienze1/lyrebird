@@ -17,6 +17,7 @@ const (
 	KindValidation
 	KindNotFound
 	KindConflict
+	KindUnauthorized
 )
 
 // Explained is Explain's result: a message stating what failed and how to
@@ -44,6 +45,8 @@ func Explain(err error) Explained {
 		return Explained{KindValidation, err.Error() + " — the default space cannot be deleted."}
 	case errors.Is(err, domain.ErrNotFound):
 		return Explained{KindNotFound, err.Error() + " — call the matching list tool (list_mocks/list_traffic/list_upstreams) to see valid ids for this space."}
+	case errors.Is(err, domain.ErrInvalidClientKey):
+		return Explained{KindUnauthorized, err.Error() + " — check the client_key against LYREBIRD_AUTH_KEYS."}
 	default:
 		return Explained{KindInternal, "internal error: " + err.Error()}
 	}

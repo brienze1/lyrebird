@@ -31,6 +31,8 @@ func writeUseCaseError(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case usecase.KindConflict:
 		status = http.StatusConflict
+	case usecase.KindUnauthorized:
+		status = http.StatusUnauthorized
 	}
 	writeJSON(w, status, map[string]string{"error": explained.Message})
 }

@@ -3,14 +3,20 @@
 All tools carry model-oriented descriptions with a minimal valid example and return explanatory
 errors (FR-018–FR-020). Every tool accepts an optional `space` argument (default `default`).
 Transport: Streamable HTTP (remote) + stdio (local). When auth is enabled, calls require a bearer
-token (FR-031); the data plane is unaffected.
+token (FR-031, shipped in T055-T057); the data plane is unaffected.
 
-> **As of pass 12 of the ongoing refactor**: the auth-token requirement described above is not yet
-> enforced — `internal/infra/auth` is still a stub (tasks.md T055-T057). `list_examples`/`get_example`
-> below (FR-022) are also not yet registered (tasks.md T058-T060, `internal/adapters/examples/doc.go`
-> is a placeholder). Every other tool in this document (all of Mocks, Spy/traffic/metrics, and
-> Upstreams & partitions below) IS implemented and registered exactly as documented — confirmed
-> against the real `sdkmcp.AddTool` registrations in `internal/adapters/mcp/*.go`.
+There is no MCP-native token-issuance tool. `/mcp` shares the same path-gated control-plane mux as
+Admin REST (`internal/bootstrap/app.go`), and HTTP middleware can only exempt by URL path — not by
+which MCP tool a request's JSON-RPC body happens to be calling. A caller therefore obtains a token via
+the REST `POST /__lyrebird/auth/token` endpoint (a one-time unauthenticated bootstrap call,
+contracts/admin-rest.md — the one route explicitly exempt from the auth gate) and attaches it as an
+`Authorization: Bearer` header on every subsequent request to `/mcp` too, including the initial
+`initialize` call. See tasks.md T056 for why an MCP-side equivalent isn't added.
+
+> **As of pass 12 of the ongoing refactor**: `list_examples`/`get_example` below (FR-022) are not yet
+> registered (tasks.md T058-T060, `internal/adapters/examples/doc.go` is a placeholder). Every other
+> tool in this document IS implemented and registered exactly as documented — confirmed against the
+> real `sdkmcp.AddTool` registrations in `internal/adapters/mcp/*.go`.
 
 ## Guide & scripting docs
 
