@@ -259,15 +259,17 @@ forward-proxy (MITM), and opt-in scenarios. **Independent test**: quickstart Sce
 
 ### Tests (write first, must fail)
 
-- [ ] T055 [P] [SEC] `test/features/auth.feature`: no `LYREBIRD_AUTH_KEYS` → control plane open;
+- [x] T055 [P] [SEC] `test/features/auth.feature`: no `LYREBIRD_AUTH_KEYS` → control plane open;
   with keys → unauth control-plane calls rejected, data plane still open (SC-007); token endpoint
   issues 1h JWT; expired/missing token rejected with non-sensitive error (FR-030/031).
 
 ### Implementation
 
-- [ ] T056 [SEC] JWT issue/verify in `internal/infra/auth` (HS256, `LYREBIRD_TOKEN_TTL` default 1h);
-  `/__lyrebird/auth/token` endpoint + MCP equivalent; secrets never logged/persisted (FR-033).
-- [ ] T057 [SEC] Control-plane auth middleware (guards MCP + Admin REST except token + health);
+- [x] T056 [SEC] JWT issue/verify in `internal/infra/auth` (HS256, `LYREBIRD_TOKEN_TTL` default 1h);
+  `/__lyrebird/auth/token` endpoint (no separate MCP tool — since `/mcp` shares the same path-gated
+  control-plane mux as REST, a caller obtains one token via REST and reuses it as a Bearer header for
+  MCP calls too; see contracts/mcp-tools.md); secrets never logged/persisted (FR-033).
+- [x] T057 [SEC] Control-plane auth middleware (guards MCP + Admin REST except token + health);
   data-plane listeners explicitly exempt (FR-030).
 
 **Checkpoint**: one env var hardens the shared deployment; T055 passes.

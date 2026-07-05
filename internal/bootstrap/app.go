@@ -25,6 +25,7 @@ import (
 	"github.com/brienze1/lyrebird/internal/adapters/scripting"
 	"github.com/brienze1/lyrebird/internal/adapters/template"
 	"github.com/brienze1/lyrebird/internal/domain"
+	"github.com/brienze1/lyrebird/internal/infra/auth"
 	"github.com/brienze1/lyrebird/internal/infra/clock"
 	"github.com/brienze1/lyrebird/internal/infra/config"
 	"github.com/brienze1/lyrebird/internal/infra/crypto"
@@ -96,6 +97,11 @@ type core struct {
 	// turned on).
 	mitmCA          *mitmca.CA
 	getMITMCACertUC *usecase.GetMITMCACert
+
+	// authIssuer and issueTokenUC are nil unless cfg.AuthEnabled() (see
+	// buildCore) — never box a nil authIssuer unconditionally into httpmw.Auth.
+	authIssuer   *auth.Issuer
+	issueTokenUC *usecase.IssueToken
 
 	mcpServer *sdkmcp.Server
 }
@@ -181,6 +187,13 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 		getMITMCACertUC = usecase.NewGetMITMCACert(mitmCA)
 	}
 
+	var authIssuer *auth.Issuer
+	var issueTokenUC *usecase.IssueToken
+	if cfg.AuthEnabled() {
+		authIssuer = auth.NewIssuer(cfg.AuthKeys, cfg.TokenTTL, clock.System{})
+		issueTokenUC = usecase.NewIssueToken(cfg.AuthKeys, authIssuer)
+	}
+
 	mcpServer := mcp.New(mcp.Deps{
 		DefaultSpace:   cfg.DefaultSpace,
 		MockCRUD:       mockCRUDUC,
@@ -208,6 +221,7 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 		createSpaceUC: createSpaceUC, listSpacesUC: listSpacesUC, deleteSpaceUC: deleteSpaceUC,
 		templater: templater, scriptEngine: scriptEngine,
 		mitmCA: mitmCA, getMITMCACertUC: getMITMCACertUC,
+		authIssuer: authIssuer, issueTokenUC: issueTokenUC,
 		mcpServer: mcpServer,
 	}, nil
 }
@@ -245,6 +259,9 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	controlMux.HandleFunc("DELETE /__lyrebird/spaces/{id}", httpadmin.DeleteSpace(c.deleteSpaceUC))
 	if c.getMITMCACertUC != nil {
 		controlMux.HandleFunc("GET /__lyrebird/mitm/ca-cert", httpadmin.GetMITMCACert(c.getMITMCACertUC))
+	}
+	if c.issueTokenUC != nil {
+		controlMux.HandleFunc("POST /__lyrebird/auth/token", httpadmin.IssueToken(c.issueTokenUC))
 	}
 	controlMux.Handle("/mcp", mcp.Handler(c.mcpServer))
 
@@ -299,7 +316,14 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	// target ("host:port") parses to an empty r.URL.Path — a mux route
 	// would 404 it before ServeHTTP (and therefore serveConnect) ever ran.
 	dataSrv := &http.Server{Handler: partitionMW(dataHandler)}
-	controlSrv := &http.Server{Handler: partitionMW(controlMux)}
+
+	controlHandler := partitionMW(controlMux)
+	if cfg.AuthEnabled() {
+		controlHandler = httpmw.Auth(c.authIssuer,
+			"/__lyrebird/healthz", "/__lyrebird/readyz", "/__lyrebird/auth/token",
+		)(controlHandler)
+	}
+	controlSrv := &http.Server{Handler: controlHandler}
 
 	go func() {
 		if err := dataSrv.Serve(dataLn); err != nil && err != http.ErrServerClosed {

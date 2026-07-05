@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/cucumber/godog"
@@ -24,6 +25,10 @@ type mcpState struct {
 
 	lastResult *sdkmcp.CallToolResult
 	lastErr    error
+
+	// lastConnectErr lets a connection expected to fail not fail the step
+	// itself — a later assertion step checks it.
+	lastConnectErr error
 }
 
 func (m *mcpState) anMCPClientIsConnectedToTheControlPlane(ctx context.Context) error {
@@ -33,6 +38,38 @@ func (m *mcpState) anMCPClientIsConnectedToTheControlPlane(ctx context.Context) 
 	}, nil)
 	if err != nil {
 		return fmt.Errorf("connect MCP client: %w", err)
+	}
+	m.session = session
+	return nil
+}
+
+func (m *mcpState) iAttemptToConnectAnMCPClientToTheControlPlaneWithNoBearerToken(ctx context.Context) error {
+	m.client = sdkmcp.NewClient(&sdkmcp.Implementation{Name: "lyrebird-bdd", Version: "0.0.0"}, nil)
+	session, err := m.client.Connect(ctx, &sdkmcp.StreamableClientTransport{
+		Endpoint: fmt.Sprintf("http://%s/mcp", m.s.app.ControlAddr()),
+	}, nil)
+	m.session, m.lastConnectErr = session, err
+	return nil
+}
+
+func (m *mcpState) theMCPConnectionAttemptFails() error {
+	if m.lastConnectErr == nil {
+		return fmt.Errorf("MCP connection attempt succeeded, want it to fail")
+	}
+	return nil
+}
+
+func (m *mcpState) anMCPClientIsConnectedToTheControlPlaneWithTheIssuedBearerToken(ctx context.Context) error {
+	if m.s.lastIssuedToken == "" {
+		return fmt.Errorf("no control-plane token has been issued yet")
+	}
+	m.client = sdkmcp.NewClient(&sdkmcp.Implementation{Name: "lyrebird-bdd", Version: "0.0.0"}, nil)
+	session, err := m.client.Connect(ctx, &sdkmcp.StreamableClientTransport{
+		Endpoint:   fmt.Sprintf("http://%s/mcp", m.s.app.ControlAddr()),
+		HTTPClient: &http.Client{Transport: &bearerRoundTripper{token: m.s.lastIssuedToken, base: http.DefaultTransport}},
+	}, nil)
+	if err != nil {
+		return fmt.Errorf("connect MCP client with bearer token: %w", err)
 	}
 	m.session = session
 	return nil
@@ -179,6 +216,11 @@ func RegisterMcpSteps(sc *godog.ScenarioContext, s *appState) {
 	m := &mcpState{s: s}
 
 	sc.Step(`^an MCP client is connected to the control plane$`, m.anMCPClientIsConnectedToTheControlPlane)
+	sc.Step(`^I attempt to connect an MCP client to the control plane with no bearer token$`,
+		m.iAttemptToConnectAnMCPClientToTheControlPlaneWithNoBearerToken)
+	sc.Step(`^the MCP connection attempt fails$`, m.theMCPConnectionAttemptFails)
+	sc.Step(`^an MCP client is connected to the control plane with the issued bearer token$`,
+		m.anMCPClientIsConnectedToTheControlPlaneWithTheIssuedBearerToken)
 	sc.Step(`^I call the MCP tool "([^"]*)" with arguments '(.*)'$`, m.iCallTheMCPToolWithArguments)
 	sc.Step(`^I promote the last recorded traffic into a mock named "([^"]*)"$`, m.iPromoteTheLastRecordedTrafficIntoAMockNamed)
 	sc.Step(`^the MCP call succeeds$`, m.theMCPCallSucceeds)

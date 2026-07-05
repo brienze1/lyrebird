@@ -7,10 +7,10 @@ the token endpoint and health require `Authorization: Bearer` (FR-031).
 
 > **As of pass 12 of the ongoing refactor**: rows marked **(PLANNED, NOT YET IMPLEMENTED)** below have
 > no route registered in `internal/bootstrap/app.go` today — confirmed against the real route table
-> (`internal/adapters/httpadmin/*.go`'s exported handlers). This includes the entire auth-token flow
-> (`internal/infra/auth` is a stub, tasks.md T055-T057), the examples/recipe endpoints (tasks.md
-> T058-T060), and import/export (tasks.md T061). Every other row IS implemented and registered exactly
-> as documented. Note `GET /__lyrebird/metrics` specifically: `metrics` exists as an MCP tool
+> (`internal/adapters/httpadmin/*.go`'s exported handlers). This includes the examples/recipe endpoints
+> (tasks.md T058-T060) and import/export (tasks.md T061). Every other row IS implemented and registered
+> exactly as documented (the auth-token flow shipped in T055-T057 and is no longer PLANNED). Note
+> `GET /__lyrebird/metrics` specifically: `metrics` exists as an MCP tool
 > (`internal/adapters/mcp/traffic.go`) but has no REST twin — this is allowed under FR-018 (MCP may
 > have capabilities REST lacks; only the reverse is forbidden), but the row below is aspirational, not
 > live, until a REST handler is added.
@@ -33,7 +33,7 @@ the token endpoint and health require `Authorization: Bearer` (FR-031).
 | `GET /__lyrebird/mitm/ca-cert` | — (raw `application/x-pem-file` body, not JSON) | get_mitm_ca_cert; only registered when `LYREBIRD_MITM_ENABLED=true` (T054/T067) | FR-033 |
 | `GET /__lyrebird/examples[/{id}]` **(PLANNED, NOT YET IMPLEMENTED)** | — | list/get_example | FR-022 |
 | `POST /__lyrebird/import` / `GET /__lyrebird/export` **(PLANNED, NOT YET IMPLEMENTED)** | YAML bundle | seed round-trip | FR-034 |
-| `POST /__lyrebird/auth/token` **(PLANNED, NOT YET IMPLEMENTED)** | `{ client_key }` | issue JWT (auth-enabled only) | FR-031 |
+| `POST /__lyrebird/auth/token` | `{ client_key }` | issue JWT (auth-enabled only; exempt from the auth gate itself) | FR-031 |
 | `GET /__lyrebird/healthz` `GET /__lyrebird/readyz` | — | liveness/readiness (never authed) | FR-034 |
 
 Ports: data-plane proxy listener(s) separate from the control-plane listener (MCP HTTP + this REST).

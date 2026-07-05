@@ -43,12 +43,18 @@ type appState struct {
 	mitmEnabled     bool
 	mitmCACertFile  string
 	mitmCAKeyFile   string
+	authKeys        []string
+	tokenTTL        time.Duration
 
 	// logCapture receives every scenario's slog output (instead of
 	// io.Discard) so mitm.feature can assert the CA private key never
 	// appears in a log line. Always allocated fresh in bootWithDataKey;
 	// unused by every scenario that never asserts against it.
 	logCapture *syncBuffer
+
+	// lastIssuedToken is set by auth.feature's token-issuance step and read
+	// by steps_mcp.go's "connected... with the issued bearer token" step.
+	lastIssuedToken string
 
 	// lastFakeUpstream mirrors spyState's own private field of the same
 	// name, set by RegisterSpySteps's newFakeUpstream — exposed here so
@@ -128,6 +134,20 @@ func (s *appState) mitmIsEnabled() error {
 	return nil
 }
 
+func (s *appState) theAuthKeysAreConfiguredTo(csv string) error {
+	s.authKeys = strings.Split(csv, ",")
+	return nil
+}
+
+func (s *appState) theTokenTTLIsConfiguredTo(d string) error {
+	parsed, err := time.ParseDuration(d)
+	if err != nil {
+		return fmt.Errorf("parse token TTL %q: %w", d, err)
+	}
+	s.tokenTTL = parsed
+	return nil
+}
+
 func (s *appState) bootWithDataKey(ctx context.Context, dataKeyB64 string) error {
 	upstreamTimeout := s.upstreamTimeout
 	if upstreamTimeout == 0 {
@@ -145,13 +165,17 @@ func (s *appState) bootWithDataKey(ctx context.Context, dataKeyB64 string) error
 	if trafficTTL == 0 {
 		trafficTTL = time.Hour
 	}
+	tokenTTL := s.tokenTTL
+	if tokenTTL == 0 {
+		tokenTTL = time.Hour
+	}
 
 	cfg := config.Config{
 		DataPlaneAddr:    "127.0.0.1:0",
 		ControlPlaneAddr: "127.0.0.1:0",
 		DefaultSpace:     "default",
 		TrafficTTL:       trafficTTL,
-		TokenTTL:         time.Hour,
+		TokenTTL:         tokenTTL,
 		BodyCapBytes:     bodyCapBytes,
 		UpstreamTimeout:  upstreamTimeout,
 		DBPath:           s.dbPath,
@@ -162,6 +186,7 @@ func (s *appState) bootWithDataKey(ctx context.Context, dataKeyB64 string) error
 		MITMEnabled:      s.mitmEnabled,
 		MITMCACertFile:   s.mitmCACertFile,
 		MITMCAKeyFile:    s.mitmCAKeyFile,
+		AuthKeys:         s.authKeys,
 	}
 
 	s.logCapture = &syncBuffer{}
@@ -222,6 +247,8 @@ func RegisterCoreAppSteps(sc *godog.ScenarioContext, s *appState) {
 	sc.Step(`^the traffic TTL is configured to "([^"]*)"$`, s.theTrafficTTLIsConfiguredTo)
 	sc.Step(`^the allowed proxy hosts are configured to "([^"]*)"$`, s.theAllowedProxyHostsAreConfiguredTo)
 	sc.Step(`^MITM is enabled$`, s.mitmIsEnabled)
+	sc.Step(`^the auth keys are configured to "([^"]*)"$`, s.theAuthKeysAreConfiguredTo)
+	sc.Step(`^the token TTL is configured to "([^"]*)"$`, s.theTokenTTLIsConfiguredTo)
 	sc.Step(`^Lyrebird boots$`, s.lyrebirdBoots)
 	sc.Step(`^Lyrebird boots again$`, s.lyrebirdBootsAgain)
 	sc.Step(`^Lyrebird boots with data key "([^"]*)"$`, s.lyrebirdBootsWithDataKey)
