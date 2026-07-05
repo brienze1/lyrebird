@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/brienze1/lyrebird/internal/adapters/httpmw"
@@ -81,6 +82,7 @@ type Handler struct {
 	log          *slog.Logger
 	allowHosts   []string
 	serverCtx    context.Context
+	mitmCA       mitmCA
 }
 
 // NewHandler builds the data-plane Handler. serverCtx is the
@@ -90,12 +92,14 @@ type Handler struct {
 // r.Context() alone can't be used for that. allowHosts is
 // cfg.AllowProxyHosts; empty means every host may be proxied (today's
 // behavior, preserved — Principle V: a security feature activates only
-// when explicitly configured).
+// when explicitly configured). mitmCA is nil unless MITM is enabled
+// (cfg.MITMEnabled) — ServeHTTP rejects CONNECT with 501 whenever it is nil,
+// so the flag being off leaves every other code path provably unchanged.
 func NewHandler(
 	serverCtx context.Context,
 	upstreams upstreamLister, record trafficRecorder, matchReq mockMatcher, tpl usecase.Templater,
 	script scriptEvaluator, scenario scenarioAdvancer, engine *Engine, bodyCapBytes int64,
-	clock usecase.Clock, log *slog.Logger, allowHosts []string,
+	clock usecase.Clock, log *slog.Logger, allowHosts []string, mitmCA mitmCA,
 ) *Handler {
 	if log == nil {
 		log = slog.Default()
@@ -106,12 +110,29 @@ func NewHandler(
 	return &Handler{
 		upstreams: upstreams, record: record, matchReq: matchReq, tpl: tpl, script: script, scenario: scenario,
 		engine: engine, bodyCapBytes: bodyCapBytes, clock: clock, log: log, allowHosts: allowHosts, serverCtx: serverCtx,
+		mitmCA: mitmCA,
 	}
 }
 
+// ServeHTTP dispatches a CONNECT request to serveConnect (the MITM tunnel
+// path) and everything else to serveOne with forwardTo nil (the unmodified
+// M1 spy/reverse-proxy path).
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	start := h.clock.Now()
 	partition := httpmw.PartitionFromContext(r.Context())
+	if r.Method == http.MethodConnect {
+		h.serveConnect(w, r, partition)
+		return
+	}
+	h.serveOne(w, r, partition, nil)
+}
+
+// serveOne is ServeHTTP's real body — reused as-is for a plain reverse-proxy
+// request (forwardTo nil) and for one plaintext HTTP request read off an
+// MITM tunnel after TLS termination (forwardTo set to the CONNECT target),
+// so the entire match/mock/fault/proxy/record pipeline is identical in both
+// modes.
+func (h *Handler) serveOne(w http.ResponseWriter, r *http.Request, partition string, forwardTo *url.URL) {
+	start := h.clock.Now()
 
 	peeked, body, err := peekBody(r.Body, h.bodyCapBytes)
 	if err != nil {
@@ -146,7 +167,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if matched && mock.Action.Kind == domain.ActionRespond && mock.Action.Respond != nil {
-		h.serveMocked(w, r, partition, start, reqHeaders, reqBody, reqCapture, mock, in)
+		h.serveMocked(w, r, partition, start, reqHeaders, reqBody, reqCapture, mock, in, forwardTo)
 		return
 	}
 	if matched && mock.Action.Kind == domain.ActionFault && mock.Action.Fault != nil {
@@ -155,11 +176,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if matched && mock.Action.Kind == domain.ActionProxy && mock.Action.Proxy != nil {
 		mockID := mock.ID
-		h.serveProxied(w, r, partition, start, reqHeaders, reqBody, reqCapture, in, mock.Action.Proxy, &mockID)
+		h.serveProxied(w, r, partition, start, reqHeaders, reqBody, reqCapture, in, mock.Action.Proxy, &mockID, forwardTo)
 		return
 	}
 
-	h.serveProxied(w, r, partition, start, reqHeaders, reqBody, reqCapture, in, nil, nil)
+	h.serveProxied(w, r, partition, start, reqHeaders, reqBody, reqCapture, in, nil, nil, forwardTo)
 }
 
 // serveProxied is the real-upstream path — reached both by a bare unmatched
@@ -167,30 +188,41 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // match (action carries that mock's rewrite/transform/latency config,
 // matchedMockID its id). Unifying both into one method is what lets the
 // allow/deny host check (FR-006) and Engine.Forward's rewrite/transform
-// hooks apply identically regardless of which path led here.
+// hooks apply identically regardless of which path led here. forwardTo is
+// non-nil only for a request read off an MITM tunnel (serveConnect) — it
+// bypasses h.upstreams.Execute/ResolveUpstream entirely and synthesizes the
+// Upstream directly from the CONNECT target, since forward/MITM mode has no
+// Upstream record to resolve (data-model.md: "In forward-proxy/MITM mode the
+// target is derived from the request").
 func (h *Handler) serveProxied(
 	w http.ResponseWriter, r *http.Request, partition string, start time.Time,
 	reqHeaders map[string][]string, reqBody io.Reader, reqCapture *cappedCapture,
-	in usecase.MatchInput, action *domain.ProxyAction, matchedMockID *string,
+	in usecase.MatchInput, action *domain.ProxyAction, matchedMockID *string, forwardTo *url.URL,
 ) {
 	if !HostAllowed(h.allowHosts, r.Host) {
 		h.serveBlocked(w, r, partition, start, reqHeaders, reqBody, reqCapture)
 		return
 	}
 
-	upstreams, err := h.upstreams.Execute(r.Context(), partition)
-	if err != nil {
-		_, _ = io.CopyN(io.Discard, reqBody, h.bodyCapBytes+1)
-		reqStoredBody, reqTrunc, reqTotal := reqCapture.Result()
-		h.serveInternalError(w, r, partition, start, reqHeaders, reqStoredBody, reqTrunc, reqTotal, matchedMockID,
-			"upstream_lookup_failed", fmt.Sprintf("failed to list upstreams for partition %q: %v", partition, err))
-		return
-	}
+	var upstream domain.Upstream
+	if forwardTo != nil {
+		upstream = domain.Upstream{TargetURL: forwardTo.Scheme + "://" + forwardTo.Host}
+	} else {
+		upstreams, err := h.upstreams.Execute(r.Context(), partition)
+		if err != nil {
+			_, _ = io.CopyN(io.Discard, reqBody, h.bodyCapBytes+1)
+			reqStoredBody, reqTrunc, reqTotal := reqCapture.Result()
+			h.serveInternalError(w, r, partition, start, reqHeaders, reqStoredBody, reqTrunc, reqTotal, matchedMockID,
+				"upstream_lookup_failed", fmt.Sprintf("failed to list upstreams for partition %q: %v", partition, err))
+			return
+		}
 
-	upstream, found := ResolveUpstream(upstreams, r.Host)
-	if !found {
-		h.serveNotConfigured(w, r, partition, start, reqHeaders, reqBody, reqCapture)
-		return
+		var found bool
+		upstream, found = ResolveUpstream(upstreams, r.Host)
+		if !found {
+			h.serveNotConfigured(w, r, partition, start, reqHeaders, reqBody, reqCapture)
+			return
+		}
 	}
 
 	rec := h.engine.Forward(w, r, upstream, h.bodyCapBytes, action, in)
@@ -212,7 +244,7 @@ func (h *Handler) serveProxied(
 func (h *Handler) serveMocked(
 	w http.ResponseWriter, r *http.Request, partition string, start time.Time,
 	reqHeaders map[string][]string, reqBody io.Reader, reqCapture *cappedCapture,
-	mock domain.Mock, in usecase.MatchInput,
+	mock domain.Mock, in usecase.MatchInput, forwardTo *url.URL,
 ) {
 	respondAction := *mock.Action.Respond
 	if mock.Scenario != nil {
@@ -250,7 +282,7 @@ func (h *Handler) serveMocked(
 			// observed this state, and is what makes fallthrough's
 			// "stop matching once exhausted" guarantee hold under
 			// concurrency, not just for a single request in isolation.
-			h.serveProxied(w, r, partition, start, reqHeaders, reqBody, reqCapture, in, nil, nil)
+			h.serveProxied(w, r, partition, start, reqHeaders, reqBody, reqCapture, in, nil, nil, forwardTo)
 			return
 		}
 		respondAction = usecase.ResolveScenarioResponse(*mock.Scenario, idx)

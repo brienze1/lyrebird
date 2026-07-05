@@ -38,6 +38,16 @@ type Config struct {
 	// only (no HTTP listeners) instead of running the normal HTTP daemon —
 	// the local-agent transport mode (contracts/mcp-tools.md).
 	MCPStdio bool
+	// MITMEnabled activates the transparent forward-proxy/MITM data-plane
+	// path (T054) — off by default (Principle V), on via
+	// LYREBIRD_MITM_ENABLED.
+	MITMEnabled bool
+	// MITMCACertFile/MITMCAKeyFile point at mounted PEM files for a stable
+	// MITM CA (data-model.md's MITM Certificate Authority section). Both
+	// empty means a fresh, disposable CA is generated every boot; both must
+	// be set together, or neither.
+	MITMCACertFile string
+	MITMCAKeyFile  string
 }
 
 // Load reads and validates configuration from the environment. It fails fast
@@ -86,6 +96,19 @@ func Load() (Config, error) {
 		if _, err := base64.StdEncoding.DecodeString(cfg.DataKeyB64); err != nil {
 			return Config{}, fmt.Errorf("config: LYREBIRD_DATA_KEY is not valid base64")
 		}
+	}
+
+	if raw := os.Getenv("LYREBIRD_MITM_ENABLED"); raw != "" {
+		mitmEnabled, err := strconv.ParseBool(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("config: LYREBIRD_MITM_ENABLED=%q is not a valid boolean", raw)
+		}
+		cfg.MITMEnabled = mitmEnabled
+	}
+	cfg.MITMCACertFile = os.Getenv("LYREBIRD_MITM_CA_CERT_FILE")
+	cfg.MITMCAKeyFile = os.Getenv("LYREBIRD_MITM_CA_KEY_FILE")
+	if (cfg.MITMCACertFile == "") != (cfg.MITMCAKeyFile == "") {
+		return Config{}, fmt.Errorf("config: LYREBIRD_MITM_CA_CERT_FILE and LYREBIRD_MITM_CA_KEY_FILE must both be set, or neither")
 	}
 
 	return cfg, nil

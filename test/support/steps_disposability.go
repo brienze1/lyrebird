@@ -40,6 +40,15 @@ type appState struct {
 	gcInterval      time.Duration
 	trafficTTL      time.Duration
 	allowProxyHosts []string
+	mitmEnabled     bool
+	mitmCACertFile  string
+	mitmCAKeyFile   string
+
+	// logCapture receives every scenario's slog output (instead of
+	// io.Discard) so mitm.feature can assert the CA private key never
+	// appears in a log line. Always allocated fresh in bootWithDataKey;
+	// unused by every scenario that never asserts against it.
+	logCapture *syncBuffer
 
 	// lastFakeUpstream mirrors spyState's own private field of the same
 	// name, set by RegisterSpySteps's newFakeUpstream — exposed here so
@@ -114,6 +123,11 @@ func (s *appState) theAllowedProxyHostsAreConfiguredTo(csv string) error {
 	return nil
 }
 
+func (s *appState) mitmIsEnabled() error {
+	s.mitmEnabled = true
+	return nil
+}
+
 func (s *appState) bootWithDataKey(ctx context.Context, dataKeyB64 string) error {
 	upstreamTimeout := s.upstreamTimeout
 	if upstreamTimeout == 0 {
@@ -145,12 +159,27 @@ func (s *appState) bootWithDataKey(ctx context.Context, dataKeyB64 string) error
 		GCInterval:       gcInterval,
 		DataKeyB64:       dataKeyB64,
 		AllowProxyHosts:  s.allowProxyHosts,
+		MITMEnabled:      s.mitmEnabled,
+		MITMCACertFile:   s.mitmCACertFile,
+		MITMCAKeyFile:    s.mitmCAKeyFile,
 	}
 
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	s.logCapture = &syncBuffer{}
+	log := slog.New(slog.NewTextHandler(s.logCapture, nil))
 	app, err := bootstrap.Run(ctx, cfg, log)
 	s.app, s.bootErr = app, err
 	return nil // the outcome is asserted by a later step, not here
+}
+
+// lyrebirdBootsAgain simulates a restart: shuts down the currently running
+// app (if any) and boots a fresh one against the same on-disk state (dbPath,
+// seedDir) and the same pre-boot config overrides — used by mitm.feature to
+// assert CA lifecycle behavior (disposable vs. stable) across a restart.
+func (s *appState) lyrebirdBootsAgain(ctx context.Context) error {
+	if s.app != nil {
+		_ = s.app.Shutdown(ctx)
+	}
+	return s.bootWithDataKey(ctx, "")
 }
 
 func (s *appState) bootSucceeds() error {
@@ -192,7 +221,9 @@ func RegisterCoreAppSteps(sc *godog.ScenarioContext, s *appState) {
 	sc.Step(`^the GC interval is configured to "([^"]*)"$`, s.theGCIntervalIsConfiguredTo)
 	sc.Step(`^the traffic TTL is configured to "([^"]*)"$`, s.theTrafficTTLIsConfiguredTo)
 	sc.Step(`^the allowed proxy hosts are configured to "([^"]*)"$`, s.theAllowedProxyHostsAreConfiguredTo)
+	sc.Step(`^MITM is enabled$`, s.mitmIsEnabled)
 	sc.Step(`^Lyrebird boots$`, s.lyrebirdBoots)
+	sc.Step(`^Lyrebird boots again$`, s.lyrebirdBootsAgain)
 	sc.Step(`^Lyrebird boots with data key "([^"]*)"$`, s.lyrebirdBootsWithDataKey)
 	sc.Step(`^boot succeeds$`, s.bootSucceeds)
 	sc.Step(`^the control plane reports ready$`, s.theControlPlaneReportsReady)

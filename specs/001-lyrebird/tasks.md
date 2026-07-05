@@ -243,9 +243,9 @@ forward-proxy (MITM), and opt-in scenarios. **Independent test**: quickstart Sce
 - [x] T051 [P] [US7] Fault/latency injection actions (delay/reset/timeout/malformed).
 - [x] T052 [P] [US7] Proxy allow/deny host policy (`LYREBIRD_ALLOW_PROXY_HOSTS`) + record outcome.
 - [x] T053 [US7] Scenario sequential responses + `scenario_state` (reset on reset).
-- [ ] T054 [US7] Transparent forward-proxy / MITM: on-the-fly cert signing from a Lyrebird CA;
+- [x] T054 [US7] Transparent forward-proxy / MITM: on-the-fly cert signing from a Lyrebird CA;
   destination derived from CONNECT/Host; same record+decide pipeline.
-- [ ] T067 [US7] MITM CA key lifecycle (per data-model.md): generate a disposable CA at startup by
+- [x] T067 [US7] MITM CA key lifecycle (per data-model.md): generate a disposable CA at startup by
   default OR load a stable CA from mounted files/env; expose `ca_cert` (public) for clients to trust;
   store `ca_key` encrypted at rest (reuse `internal/infra/crypto`), NEVER log/export it; mint + cache
   per-host leaf certs in memory only. Add a test asserting `ca_key` is never returned by any endpoint
