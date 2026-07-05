@@ -35,4 +35,10 @@ var (
 	// (constitution Principle III, FR-025) — the rejection is explicit
 	// rather than a silent no-op or a bare ErrNotFound.
 	ErrSeededMockImmutable = errors.New("lyrebird: seeded mock cannot be modified or deleted")
+
+	// ErrInvalidTrafficFilter is returned when a TrafficFilter fails basic
+	// validation (e.g. a negative Limit). Limit == 0 is a legitimate,
+	// documented sentinel meaning "unbounded" and is never rejected — only
+	// values with no legitimate meaning are.
+	ErrInvalidTrafficFilter = errors.New("lyrebird: invalid traffic filter")
 )

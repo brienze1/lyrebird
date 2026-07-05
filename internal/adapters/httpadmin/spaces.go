@@ -41,7 +41,9 @@ func ListSpaces(uc listSpacesUseCase) http.HandlerFunc {
 func CreateSpace(uc createSpaceUseCase) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var d dto.PartitionDTO
-		if err := json.NewDecoder(r.Body).Decode(&d); err != nil {
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&d); err != nil {
 			writeJSONError(w, http.StatusBadRequest, err)
 			return
 		}

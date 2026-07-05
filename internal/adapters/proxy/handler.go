@@ -49,6 +49,12 @@ type scriptEvaluator interface {
 // exhausted" check before matching got this far).
 type scenarioAdvancer interface {
 	AdvanceScenario(ctx context.Context, partition, mockID string) (int, error)
+	// AdvanceEphemeralScenario is AdvanceScenario's TOCTOU-safe sibling for
+	// ephemeral (domain.LifetimeEphemeral) mocks — see
+	// store.AdvanceEphemeralScenario's doc comment for the race it closes
+	// against gc.go's sweep, and why seeded mocks must keep using
+	// AdvanceScenario instead.
+	AdvanceEphemeralScenario(ctx context.Context, partition, mockID string) (int, error)
 }
 
 // Handler is Lyrebird's data-plane entry point (T029): a mock-match check
@@ -109,7 +115,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	peeked, body, err := peekBody(r.Body, h.bodyCapBytes)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		reqHeaders := map[string][]string(r.Header.Clone())
+		h.serveInternalError(w, r, partition, start, reqHeaders, nil, false, 0, nil,
+			"peek_body_failed", fmt.Sprintf("failed to read request body: %v", err))
 		return
 	}
 	r.Body = body
@@ -131,7 +139,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.serveScriptFailed(w, r, partition, start, reqHeaders, reqBody, reqCapture, serr)
 			return
 		}
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		_, _ = io.CopyN(io.Discard, reqBody, h.bodyCapBytes+1)
+		reqStoredBody, reqTrunc, reqTotal := reqCapture.Result()
+		h.serveInternalError(w, r, partition, start, reqHeaders, reqStoredBody, reqTrunc, reqTotal, nil,
+			"match_failed", fmt.Sprintf("request matching failed: %v", err))
 		return
 	}
 	if matched && mock.Action.Kind == domain.ActionRespond && mock.Action.Respond != nil {
@@ -169,7 +180,10 @@ func (h *Handler) serveProxied(
 
 	upstreams, err := h.upstreams.Execute(r.Context(), partition)
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		_, _ = io.CopyN(io.Discard, reqBody, h.bodyCapBytes+1)
+		reqStoredBody, reqTrunc, reqTotal := reqCapture.Result()
+		h.serveInternalError(w, r, partition, start, reqHeaders, reqStoredBody, reqTrunc, reqTotal, matchedMockID,
+			"upstream_lookup_failed", fmt.Sprintf("failed to list upstreams for partition %q: %v", partition, err))
 		return
 	}
 
@@ -182,7 +196,7 @@ func (h *Handler) serveProxied(
 	rec := h.engine.Forward(w, r, upstream, h.bodyCapBytes, action, in)
 	reqStoredBody, reqTrunc, reqTotal := reqCapture.Result()
 
-	h.recordAsync(r.Context(), partition, r, start,
+	h.recordTraffic(r.Context(), partition, r, start,
 		reqHeaders, reqStoredBody, reqTrunc, reqTotal, matchedMockID,
 		domain.DecisionProxied, rec.Status, rec.Headers, rec.Body, rec.BodyTruncated, rec.BodyTotalSize)
 }
@@ -202,9 +216,25 @@ func (h *Handler) serveMocked(
 ) {
 	respondAction := *mock.Action.Respond
 	if mock.Scenario != nil {
-		idx, err := h.scenario.AdvanceScenario(r.Context(), partition, mock.ID)
+		// Ephemeral mocks route through the TOCTOU-guarded sibling: mock is
+		// only a snapshot taken at match time, with no re-check here that it
+		// still exists, so a concurrent GC sweep (store.
+		// PruneExpiredEphemeralMocks) could have deleted it in the meantime.
+		// Seeded mocks are never stored in ephemeral_mocks at all, so they
+		// keep using the original, unguarded AdvanceScenario.
+		var idx int
+		var err error
+		if mock.Lifetime == domain.LifetimeEphemeral {
+			idx, err = h.scenario.AdvanceEphemeralScenario(r.Context(), partition, mock.ID)
+		} else {
+			idx, err = h.scenario.AdvanceScenario(r.Context(), partition, mock.ID)
+		}
 		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			_, _ = io.CopyN(io.Discard, reqBody, h.bodyCapBytes+1)
+			reqStoredBody, reqTrunc, reqTotal := reqCapture.Result()
+			mockID := mock.ID
+			h.serveInternalError(w, r, partition, start, reqHeaders, reqStoredBody, reqTrunc, reqTotal, &mockID,
+				"scenario_advance_failed", fmt.Sprintf("scenario advance failed for mock %q: %v", mock.ID, err))
 			return
 		}
 		if mock.Scenario.OnExhaust == domain.OnExhaustFallthrough && idx >= len(mock.Scenario.Responses) {
@@ -248,7 +278,7 @@ func (h *Handler) serveMocked(
 	}
 
 	mockID := mock.ID
-	h.recordAsync(r.Context(), partition, r, start,
+	h.recordTraffic(r.Context(), partition, r, start,
 		reqHeaders, reqStoredBody, reqTrunc, reqTotal, &mockID,
 		domain.DecisionMocked, status, respHeaders, respBody, false, int64(len(respBody)))
 }
@@ -266,7 +296,7 @@ func (h *Handler) serveFaulted(
 	status := serveFault(h.serverCtx, w, r, *mock.Action.Fault)
 
 	mockID := mock.ID
-	h.recordAsync(r.Context(), partition, r, start,
+	h.recordTraffic(r.Context(), partition, r, start,
 		reqHeaders, reqStoredBody, reqTrunc, reqTotal, &mockID,
 		domain.DecisionFaulted, status, nil, nil, false, 0)
 }
@@ -306,7 +336,7 @@ func (h *Handler) serveScriptFailedBody(
 	_, _ = w.Write(respBody)
 
 	mid := mockID
-	h.recordAsync(r.Context(), partition, r, start,
+	h.recordTraffic(r.Context(), partition, r, start,
 		reqHeaders, reqStoredBody, reqTrunc, reqTotal, &mid,
 		domain.DecisionScriptFailed, http.StatusInternalServerError,
 		map[string][]string{"Content-Type": {"application/json"}}, respBody, false, int64(len(respBody)))
@@ -335,7 +365,7 @@ func (h *Handler) serveNotConfigured(
 	w.WriteHeader(http.StatusNotFound)
 	_, _ = w.Write(respBody)
 
-	h.recordAsync(r.Context(), partition, r, start,
+	h.recordTraffic(r.Context(), partition, r, start,
 		reqHeaders, reqStoredBody, reqTrunc, reqTotal, nil,
 		domain.DecisionNotConfigured, http.StatusNotFound,
 		map[string][]string{"Content-Type": {"application/json"}}, respBody, false, int64(len(respBody)))
@@ -362,13 +392,42 @@ func (h *Handler) serveBlocked(
 	w.WriteHeader(http.StatusForbidden)
 	_, _ = w.Write(respBody)
 
-	h.recordAsync(r.Context(), partition, r, start,
+	h.recordTraffic(r.Context(), partition, r, start,
 		reqHeaders, reqStoredBody, reqTrunc, reqTotal, nil,
 		domain.DecisionBlocked, http.StatusForbidden,
 		map[string][]string{"Content-Type": {"application/json"}}, respBody, false, int64(len(respBody)))
 }
 
-func (h *Handler) recordAsync(
+// serveInternalError writes a synthesized 500 for a generic internal
+// failure that isn't one of the other specific failure modes handled
+// elsewhere in this file — a body-peek I/O failure, a non-script-related
+// match failure, an upstream-list lookup failure, or a scenario-advance
+// failure. A fail-safe outcome, recorded with DecisionInternalError so it's
+// never invisible in the traffic log. errCode is a short, call-site-specific
+// identifier (e.g. "peek_body_failed") included in the JSON body to aid
+// debugging.
+func (h *Handler) serveInternalError(
+	w http.ResponseWriter, r *http.Request, partition string, start time.Time,
+	reqHeaders map[string][]string, reqStoredBody []byte, reqTrunc bool, reqTotal int64, matchedMockID *string,
+	errCode, message string,
+) {
+	// Marshaling a map[string]string literal cannot fail; the error is
+	// deliberately discarded rather than handled.
+	respBody, _ := json.Marshal(map[string]string{
+		"error":   errCode,
+		"message": message,
+	})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusInternalServerError)
+	_, _ = w.Write(respBody)
+
+	h.recordTraffic(r.Context(), partition, r, start,
+		reqHeaders, reqStoredBody, reqTrunc, reqTotal, matchedMockID,
+		domain.DecisionInternalError, http.StatusInternalServerError,
+		map[string][]string{"Content-Type": {"application/json"}}, respBody, false, int64(len(respBody)))
+}
+
+func (h *Handler) recordTraffic(
 	ctx context.Context, partition string, r *http.Request, start time.Time,
 	reqHeaders map[string][]string, reqBody []byte, reqTrunc bool, reqTotal int64, matchedMockID *string,
 	decision domain.Decision, status int, respHeaders map[string][]string, respBody []byte, respTrunc bool, respTotal int64,

@@ -54,19 +54,19 @@ func Load() (Config, error) {
 	}
 
 	var err error
-	if cfg.TrafficTTL, err = parseDuration("LYREBIRD_TRAFFIC_TTL", "24h"); err != nil {
+	if cfg.TrafficTTL, err = parseNonNegativeDuration("LYREBIRD_TRAFFIC_TTL", "24h"); err != nil {
 		return Config{}, err
 	}
-	if cfg.TokenTTL, err = parseDuration("LYREBIRD_TOKEN_TTL", "1h"); err != nil {
+	if cfg.TokenTTL, err = parseNonNegativeDuration("LYREBIRD_TOKEN_TTL", "1h"); err != nil {
 		return Config{}, err
 	}
-	if cfg.GCInterval, err = parseDuration("LYREBIRD_GC_INTERVAL", "1m"); err != nil {
+	if cfg.GCInterval, err = parsePositiveDuration("LYREBIRD_GC_INTERVAL", "1m"); err != nil {
 		return Config{}, err
 	}
-	if cfg.UpstreamTimeout, err = parseDuration("LYREBIRD_UPSTREAM_TIMEOUT", "10s"); err != nil {
+	if cfg.UpstreamTimeout, err = parseNonNegativeDuration("LYREBIRD_UPSTREAM_TIMEOUT", "10s"); err != nil {
 		return Config{}, err
 	}
-	if cfg.ScriptTimeout, err = parseDuration("LYREBIRD_SCRIPT_TIMEOUT", "100ms"); err != nil {
+	if cfg.ScriptTimeout, err = parsePositiveDuration("LYREBIRD_SCRIPT_TIMEOUT", "100ms"); err != nil {
 		return Config{}, err
 	}
 	if cfg.BodyCapBytes, err = parsePositiveInt64("LYREBIRD_BODY_CAP_BYTES", 1<<20); err != nil {
@@ -74,7 +74,13 @@ func Load() (Config, error) {
 	}
 	cfg.AllowProxyHosts = parseCSV(os.Getenv("LYREBIRD_ALLOW_PROXY_HOSTS"))
 	cfg.AuthKeys = parseCSV(os.Getenv("LYREBIRD_AUTH_KEYS"))
-	cfg.MCPStdio = os.Getenv("LYREBIRD_MCP_STDIO") != ""
+	if raw := os.Getenv("LYREBIRD_MCP_STDIO"); raw != "" {
+		mcpStdio, err := strconv.ParseBool(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("config: LYREBIRD_MCP_STDIO=%q is not a valid boolean", raw)
+		}
+		cfg.MCPStdio = mcpStdio
+	}
 
 	if cfg.DataKeyB64 != "" {
 		if _, err := base64.StdEncoding.DecodeString(cfg.DataKeyB64); err != nil {
@@ -98,11 +104,20 @@ func getenv(key, def string) string {
 	return def
 }
 
-func parseDuration(key, def string) (time.Duration, error) {
+func parsePositiveDuration(key, def string) (time.Duration, error) {
 	raw := getenv(key, def)
 	d, err := time.ParseDuration(raw)
-	if err != nil {
-		return 0, fmt.Errorf("config: %s=%q is not a valid duration", key, raw)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("config: %s=%q must be a positive duration", key, raw)
+	}
+	return d, nil
+}
+
+func parseNonNegativeDuration(key, def string) (time.Duration, error) {
+	raw := getenv(key, def)
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 0 {
+		return 0, fmt.Errorf("config: %s=%q must be a non-negative duration", key, raw)
 	}
 	return d, nil
 }

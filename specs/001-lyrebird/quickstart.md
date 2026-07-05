@@ -65,7 +65,14 @@ docker run --rm -p 8080:8080 -p 9090:9090 \
 2. After 2s the ephemeral mock is gone; after `POST /__lyrebird/reset` the seeded mock remains.
 3. Traffic older than `LYREBIRD_TRAFFIC_TTL` is purged within one GC cycle.
 
-## Scenario G — Security defaults (SC-007)
+## Scenario G — Security defaults (SC-007) — PLANNED, NOT YET IMPLEMENTED
+
+> As of pass 10 of the ongoing refactor, `internal/infra/auth` is still a stub
+> (tracked as tasks.md's T055-T057, milestone "Auth"). `LYREBIRD_AUTH_KEYS` is
+> parsed by config but never consulted by any handler; there is no
+> `/__lyrebird/auth/token` route; the control plane is always open regardless
+> of this env var. The scenario below describes the *intended* end state once
+> T055-T057 ship — do not expect it to work against the current build.
 
 1. Start with no `LYREBIRD_AUTH_KEYS` → control plane open.
 2. Restart with `LYREBIRD_AUTH_KEYS=secret1` → control-plane calls without a bearer token are

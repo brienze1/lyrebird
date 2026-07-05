@@ -25,7 +25,16 @@ type Engine struct{}
 // New builds a matcher Engine.
 func New() *Engine { return &Engine{} }
 
-var regexCache sync.Map // pattern string -> *regexp.Regexp
+// regexCache holds pattern string -> *regexp.Regexp and is intentionally
+// unbounded and unevicted: it is keyed only by patterns from write-time
+// validated mock Match/Matcher configuration (ValidateMatch, at mock
+// create/update time), so it grows with the number of distinct configured
+// patterns, not with request volume or attacker-controlled input. Combined
+// with this project's disposability principle (short-lived deployments,
+// see usecase.Reset), an LRU/TTL is deliberately not used. This has been
+// re-evaluated across multiple refactor passes and is a closed decision,
+// not an oversight.
+var regexCache sync.Map
 
 func compileCached(pattern string) (*regexp.Regexp, error) {
 	if v, ok := regexCache.Load(pattern); ok {

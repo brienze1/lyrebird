@@ -120,13 +120,26 @@ func anyToBody(exported any) ([]byte, error) {
 // one non-nil value, so nil is unambiguous); a string becomes a
 // single-element slice; a JS array becomes a multi-element slice (each
 // element stringified via fmt.Sprint, matching how a script would naturally
-// build one from req.headers's own array shape).
-func toHeaderMap(raw any) map[string][]string {
+// build one from req.headers's own array shape). raw itself being nil (the
+// "headers" field is present but its value round-tripped to JS null or
+// undefined) is a distinct case from a wrong-shaped value: per
+// RewrittenRequest/TransformedResponse's own doc comment, a nil Headers map
+// already means "no header changes," and jsValueToRewrite's top-level
+// undefined/null already means "no changes" the same way — so
+// headers: null/undefined is treated as that same no-op, not an error,
+// returning (nil, true). ok is false only when raw is present but isn't a
+// plain object AND isn't nil (e.g. a script returned headers: [...] or
+// headers: "x"), so the caller can tell a genuinely malformed value apart
+// from both "headers wasn't set" and "headers was set to null/undefined."
+func toHeaderMap(raw any) (out map[string][]string, ok bool) {
+	if raw == nil {
+		return nil, true
+	}
 	obj, ok := raw.(map[string]any)
 	if !ok {
-		return nil
+		return nil, false
 	}
-	out := make(map[string][]string, len(obj))
+	out = make(map[string][]string, len(obj))
 	for k, v := range obj {
 		switch val := v.(type) {
 		case nil:
@@ -143,7 +156,7 @@ func toHeaderMap(raw any) map[string][]string {
 			out[k] = []string{fmt.Sprint(val)}
 		}
 	}
-	return out
+	return out, true
 }
 
 // jsNumberToInt accepts either of goja's two possible number export types
@@ -181,7 +194,11 @@ func jsValueToRewrite(v goja.Value) (usecase.RewrittenRequest, error) {
 		out.Path = &p
 	}
 	if h, present := obj["headers"]; present {
-		out.Headers = toHeaderMap(h)
+		headers, ok := toHeaderMap(h)
+		if !ok {
+			return usecase.RewrittenRequest{}, fmt.Errorf("scripting: rewrite_request's \"headers\" must be an object, got %T", h)
+		}
+		out.Headers = headers
 	}
 	if b, present := obj["body"]; present {
 		body, err := anyToBody(b)
@@ -208,7 +225,11 @@ func jsValueToTransform(v goja.Value) (usecase.TransformedResponse, error) {
 		out.Status = &status
 	}
 	if h, present := obj["headers"]; present {
-		out.Headers = toHeaderMap(h)
+		headers, ok := toHeaderMap(h)
+		if !ok {
+			return usecase.TransformedResponse{}, fmt.Errorf("scripting: transform_response's \"headers\" must be an object, got %T", h)
+		}
+		out.Headers = headers
 	}
 	if b, present := obj["body"]; present {
 		body, err := anyToBody(b)

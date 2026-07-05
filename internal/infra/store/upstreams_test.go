@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/brienze1/lyrebird/internal/domain"
@@ -104,5 +106,73 @@ func TestDeleteUpstreamsByPartitionOnlyAffectsThatPartition(t *testing.T) {
 	gotB, err := st.ListUpstreams(ctx, "team-b")
 	if err != nil || len(gotB) != 1 {
 		t.Fatalf("ListUpstreams(team-b) after deleting team-a = %+v, %v, want untouched", gotB, err)
+	}
+}
+
+// TestSetUpstreamConcurrentCallsAllPersist exercises SetUpstream under real
+// concurrent load: the Admin REST API can receive many simultaneous upstream
+// configuration requests for the same partition, so a lost or corrupted
+// write here would silently drop or scramble a routing target. Each
+// goroutine sets a distinct, uniquely-identifiable upstream (distinct
+// MatchHost, distinguishing TargetURL); after all finish, ListUpstreams must
+// return exactly all of them, with each upstream's MatchHost/TargetURL
+// pairing intact — proving no write is lost, duplicated, or
+// cross-contaminated with another upstream's fields under concurrent
+// access. Like TestAppendTrafficConcurrentCallsAllPersist in
+// traffic_test.go, this proves Go-level race-freedom through store.Open's
+// single-connection pool (db.SetMaxOpenConns(1)), not multi-connection
+// SQLite atomicity.
+func TestSetUpstreamConcurrentCallsAllPersist(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	const n = 50
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			u := domain.Upstream{
+				Partition: "default",
+				MatchHost: fmt.Sprintf("host-%d.example.com", i),
+				TargetURL: fmt.Sprintf("https://target-%d.example.com", i),
+			}
+			errs[i] = st.SetUpstream(ctx, u)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("SetUpstream() goroutine %d: %v", i, err)
+		}
+	}
+
+	got, err := st.ListUpstreams(ctx, "default")
+	if err != nil {
+		t.Fatalf("ListUpstreams(): %v", err)
+	}
+	if len(got) != n {
+		t.Fatalf("ListUpstreams() returned %d upstreams, want %d (some concurrent writes lost or duplicated)", len(got), n)
+	}
+
+	byHost := make(map[string]domain.Upstream, n)
+	for _, u := range got {
+		if _, dup := byHost[u.MatchHost]; dup {
+			t.Fatalf("duplicate upstream match_host %q in ListUpstreams() result", u.MatchHost)
+		}
+		byHost[u.MatchHost] = u
+	}
+	for i := 0; i < n; i++ {
+		host := fmt.Sprintf("host-%d.example.com", i)
+		u, ok := byHost[host]
+		if !ok {
+			t.Fatalf("upstream %q missing from ListUpstreams() result after concurrent SetUpstream calls", host)
+		}
+		wantTarget := fmt.Sprintf("https://target-%d.example.com", i)
+		if u.TargetURL != wantTarget {
+			t.Errorf("upstream %q TargetURL = %s, want %s (cross-contamination between concurrent writes)", host, u.TargetURL, wantTarget)
+		}
 	}
 }

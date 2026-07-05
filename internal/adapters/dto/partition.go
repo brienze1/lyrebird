@@ -15,6 +15,14 @@ func PartitionToDTO(p domain.Partition) PartitionDTO {
 	return PartitionDTO{ID: p.ID, Description: p.Description}
 }
 
+// NewPartitionDTOFromFields builds a PartitionDTO from its settable fields —
+// for adapters (e.g. mcp) that define their own parallel input schema and
+// need to construct a PartitionDTO rather than json.Decode one directly off
+// the wire the way httpadmin does.
+func NewPartitionDTOFromFields(id, description string) PartitionDTO {
+	return PartitionDTO{ID: id, Description: description}
+}
+
 // PartitionFromDTO converts a PartitionDTO to its domain equivalent.
 func PartitionFromDTO(d PartitionDTO) domain.Partition {
 	return domain.Partition{ID: d.ID, Description: d.Description}

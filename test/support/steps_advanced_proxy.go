@@ -158,9 +158,22 @@ func (a *advancedProxyState) theRequestTookAtLeast(want string) error {
 	return nil
 }
 
-func (a *advancedProxyState) theRequestFails() error {
+// theRequestFailsWithAMalformedResponseError asserts not just that the
+// request failed, but that it failed for the right reason: the client
+// choked while parsing the garbage bytes as an HTTP response. Go's
+// net/http reports this as one of a small family of errors all containing
+// "malformed HTTP" (e.g. "malformed HTTP status code", "malformed HTTP
+// response", "malformed HTTP version" — see net/http/response.go),
+// confirmed empirically against the "not a valid HTTP response\r\n" bytes
+// hijackAndWriteGarbage writes. This distinguishes the malformed fault from
+// a plain reset or timeout, which fail with a different error entirely and
+// would not contain this substring.
+func (a *advancedProxyState) theRequestFailsWithAMalformedResponseError() error {
 	if a.lastErr == nil {
 		return fmt.Errorf("request succeeded, want it to fail")
+	}
+	if !strings.Contains(strings.ToLower(a.lastErr.Error()), "malformed http") {
+		return fmt.Errorf("request failed with %q, want an error containing \"malformed HTTP\"", a.lastErr.Error())
 	}
 	return nil
 }
@@ -168,6 +181,41 @@ func (a *advancedProxyState) theRequestFails() error {
 func (a *advancedProxyState) theRequestFailsWithin(want string) error {
 	if a.lastErr == nil {
 		return fmt.Errorf("request succeeded, want it to fail")
+	}
+	parsed, err := time.ParseDuration(want)
+	if err != nil {
+		return fmt.Errorf("parse duration %q: %w", want, err)
+	}
+	if a.elapsed > parsed {
+		return fmt.Errorf("request failed after %v, want within %v", a.elapsed, parsed)
+	}
+	return nil
+}
+
+// theRequestFailsWithAConnectionResetError asserts not just that the request
+// failed fast, but that it failed for the right reason: a genuine TCP RST
+// (hijackAndReset's SetLinger(0) close), not some other fast failure with
+// the same timing profile. Empirically confirmed against this exact fault
+// path (a temporary debug print of lastErr.Error(), since removed): Go's
+// net/http surfaces this as an error containing "connection reset by peer"
+// (e.g. `Get "http://...": read tcp ...: read: connection reset by peer`).
+// Also asserting the error does NOT contain "malformed http" distinguishes
+// this from FaultMalformed's garbage-bytes failure (see
+// theRequestFailsWithAMalformedResponseError) — both fail fast, but for
+// different reasons, so if FaultReset and FaultMalformed's handlers were
+// ever swapped in fault.go's switch statement, this scenario would catch it.
+// Folds in the same elapsed-time check as theRequestFailsWithin so the
+// "closes immediately" guarantee isn't lost.
+func (a *advancedProxyState) theRequestFailsWithAConnectionResetError(want string) error {
+	if a.lastErr == nil {
+		return fmt.Errorf("request succeeded, want it to fail")
+	}
+	errText := strings.ToLower(a.lastErr.Error())
+	if strings.Contains(errText, "malformed http") {
+		return fmt.Errorf("request failed with %q, want a connection-reset error, not a malformed-response error", a.lastErr.Error())
+	}
+	if !strings.Contains(errText, "connection reset by peer") {
+		return fmt.Errorf("request failed with %q, want an error containing \"connection reset by peer\"", a.lastErr.Error())
 	}
 	parsed, err := time.ParseDuration(want)
 	if err != nil {
@@ -224,8 +272,9 @@ func RegisterAdvancedProxySteps(sc *godog.ScenarioContext, s *appState) {
 		a.iSendAGETRequestToOnTheDataPlaneWithHostWithAClientTimeoutOf)
 	sc.Step(`^the timed request succeeded with status (\d+)$`, a.theTimedRequestSucceededWithStatus)
 	sc.Step(`^the request took at least "([^"]*)"$`, a.theRequestTookAtLeast)
-	sc.Step(`^the request fails$`, a.theRequestFails)
+	sc.Step(`^the request fails with a malformed response error$`, a.theRequestFailsWithAMalformedResponseError)
 	sc.Step(`^the request fails within "([^"]*)"$`, a.theRequestFailsWithin)
+	sc.Step(`^the request fails with a connection reset error within "([^"]*)"$`, a.theRequestFailsWithAConnectionResetError)
 	sc.Step(`^the request times out without any response$`, a.theRequestTimesOutWithoutAnyResponse)
 }
 

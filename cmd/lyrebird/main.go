@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/signal"
 	"syscall"
@@ -32,7 +33,15 @@ func run() int {
 	defer stop()
 
 	if cfg.MCPStdio {
+		if os.Getenv("LYREBIRD_DATA_PORT") != "" || os.Getenv("LYREBIRD_CONTROL_PORT") != "" {
+			log.Warn("LYREBIRD_DATA_PORT/LYREBIRD_CONTROL_PORT are ignored in stdio mode " +
+				"(LYREBIRD_MCP_STDIO=true) — no HTTP listeners are started")
+		}
 		if err := bootstrap.RunStdio(ctx, cfg, log); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				log.Info("mcp stdio shut down", "err", err)
+				return 0
+			}
 			log.Error("mcp stdio run failed", "err", err)
 			return 1
 		}

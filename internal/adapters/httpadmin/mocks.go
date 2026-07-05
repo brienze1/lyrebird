@@ -53,7 +53,9 @@ func ListMocks(uc mockLister) http.HandlerFunc {
 func CreateMock(uc mockCreator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var d dto.MockDTO
-		if err := json.NewDecoder(r.Body).Decode(&d); err != nil {
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&d); err != nil {
 			writeJSONError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -88,7 +90,9 @@ func GetMock(uc mockGetter) http.HandlerFunc {
 func UpdateMock(uc mockUpdater) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var d dto.MockDTO
-		if err := json.NewDecoder(r.Body).Decode(&d); err != nil {
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&d); err != nil {
 			writeJSONError(w, http.StatusBadRequest, err)
 			return
 		}

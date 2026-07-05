@@ -1,6 +1,6 @@
 // Package httpadmin implements Lyrebird's Admin REST control-plane handlers
-// (contracts/admin-rest.md). At M0 only health/readiness exist; the rest of
-// the surface lands with the use-cases that back it (M1+).
+// (contracts/admin-rest.md): health/readiness plus the full mocks, traffic,
+// upstreams, spaces, reset, promote, and match-test REST surface.
 package httpadmin
 
 import (

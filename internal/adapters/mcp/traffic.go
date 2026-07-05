@@ -3,8 +3,10 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/brienze1/lyrebird/internal/adapters/dto"
@@ -34,7 +36,8 @@ type ListTrafficOut struct {
 
 // GetTrafficIn is get_traffic's input.
 type GetTrafficIn struct {
-	ID string `json:"id" jsonschema:"traffic record id, as returned by list_traffic/inspect_requests"`
+	Space string `json:"space,omitempty" jsonschema:"space/partition the traffic was recorded in; defaults to the server's default space"`
+	ID    string `json:"id" jsonschema:"traffic record id, as returned by list_traffic/inspect_requests"`
 }
 
 // InspectRequestsIn is inspect_requests's input.
@@ -92,7 +95,7 @@ func registerTrafficTools(s *sdkmcp.Server, deps Deps) {
 		partition := resolveSpace(in.Space, deps.DefaultSpace)
 		filter, err := trafficFilterFromIn(in)
 		if err != nil {
-			return nil, ListTrafficOut{}, err
+			return nil, ListTrafficOut{}, explainErr(err)
 		}
 		list, err := deps.ListTraffic.Execute(ctx, partition, filter)
 		if err != nil {
@@ -101,11 +104,20 @@ func registerTrafficTools(s *sdkmcp.Server, deps Deps) {
 		return nil, ListTrafficOut{Traffic: toSummaries(list)}, nil
 	})
 
+	getTrafficOutSchema, err := jsonschema.For[dto.TrafficDetailDTO](&jsonschema.ForOptions{
+		TypeSchemas: map[reflect.Type]*jsonschema.Schema{
+			reflect.TypeFor[[]byte](): {Types: []string{"null", "string"}, ContentEncoding: "base64"},
+		},
+	})
+	if err != nil {
+		panic(fmt.Sprintf("mcp: building get_traffic output schema: %v", err))
+	}
 	sdkmcp.AddTool(s, &sdkmcp.Tool{
-		Name:        "get_traffic",
-		Description: `Fetch one recorded interaction's full request+response (decrypted). Example: {"id":"<traffic-id>"}`,
+		Name:         "get_traffic",
+		Description:  `Fetch one recorded interaction's full request+response (decrypted). Example: {"id":"<traffic-id>"}`,
+		OutputSchema: getTrafficOutSchema,
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in GetTrafficIn) (*sdkmcp.CallToolResult, dto.TrafficDetailDTO, error) {
-		partition := resolveSpace("", deps.DefaultSpace)
+		partition := resolveSpace(in.Space, deps.DefaultSpace)
 		t, err := deps.GetTraffic.Execute(ctx, partition, in.ID)
 		if err != nil {
 			return nil, dto.TrafficDetailDTO{}, explainErr(err)
@@ -151,7 +163,7 @@ func registerTrafficTools(s *sdkmcp.Server, deps Deps) {
 		if in.Window != "" {
 			d, err := time.ParseDuration(in.Window)
 			if err != nil {
-				return nil, MetricsOut{}, fmt.Errorf("invalid window %q — use a Go duration string like \"1h\" or \"30m\": %w", in.Window, err)
+				return nil, MetricsOut{}, explainErr(fmt.Errorf("%w: invalid window %q — use a Go duration string like \"1h\" or \"30m\": %w", domain.ErrInvalidTrafficFilter, in.Window, err))
 			}
 			window = d
 		}
@@ -202,14 +214,14 @@ func trafficFilterFromIn(in ListTrafficIn) (usecase.TrafficFilter, error) {
 	if in.Since != "" {
 		since, err := time.Parse(time.RFC3339, in.Since)
 		if err != nil {
-			return usecase.TrafficFilter{}, fmt.Errorf("invalid since %q — use RFC3339 (e.g. 2026-01-02T15:04:05Z): %w", in.Since, err)
+			return usecase.TrafficFilter{}, fmt.Errorf("%w: invalid since %q — use RFC3339 (e.g. 2026-01-02T15:04:05Z): %w", domain.ErrInvalidTrafficFilter, in.Since, err)
 		}
 		filter.Since = &since
 	}
 	if in.Until != "" {
 		until, err := time.Parse(time.RFC3339, in.Until)
 		if err != nil {
-			return usecase.TrafficFilter{}, fmt.Errorf("invalid until %q — use RFC3339 (e.g. 2026-01-02T15:04:05Z): %w", in.Until, err)
+			return usecase.TrafficFilter{}, fmt.Errorf("%w: invalid until %q — use RFC3339 (e.g. 2026-01-02T15:04:05Z): %w", domain.ErrInvalidTrafficFilter, in.Until, err)
 		}
 		filter.Until = &until
 	}

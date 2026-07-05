@@ -73,6 +73,17 @@ func (p *partitionState) noTrafficIsRecordedInSpace(ctx context.Context, space s
 	return nil
 }
 
+func (p *partitionState) trafficIsRecordedInSpace(ctx context.Context, space string) error {
+	list, err := p.s.app.Store.ListTraffic(ctx, space, usecase.TrafficFilter{})
+	if err != nil {
+		return fmt.Errorf("list traffic in space %q: %w", space, err)
+	}
+	if len(list) == 0 {
+		return fmt.Errorf("space %q has 0 traffic record(s), want at least 1", space)
+	}
+	return nil
+}
+
 func (p *partitionState) iDeleteTheSpaceViaTheControlPlane(ctx context.Context, id string) error {
 	return p.doDeleteSpace(ctx, id)
 }
@@ -189,6 +200,7 @@ func RegisterPartitionSteps(sc *godog.ScenarioContext, s *appState) {
 	sc.Step(`^a mock named "([^"]*)" in space "([^"]*)" matching (GET|POST|PUT|PATCH|DELETE) path "([^"]*)" that responds (\d+) with body "([^"]*)"$`,
 		p.aMockNamedInSpaceMatchingPathThatRespondsWithBody)
 	sc.Step(`^no traffic is recorded in space "([^"]*)"$`, p.noTrafficIsRecordedInSpace)
+	sc.Step(`^traffic is recorded in space "([^"]*)"$`, p.trafficIsRecordedInSpace)
 	sc.Step(`^I delete the space "([^"]*)" via the control plane$`, p.iDeleteTheSpaceViaTheControlPlane)
 	sc.Step(`^I attempt to delete the space "([^"]*)" via the control plane$`, p.iAttemptToDeleteTheSpaceViaTheControlPlane)
 	sc.Step(`^the space control plane responds with status (\d+)$`, p.theSpaceControlPlaneRespondsWithStatus)

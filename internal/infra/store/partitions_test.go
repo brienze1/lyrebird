@@ -127,6 +127,71 @@ func TestDeletePartitionCascadesMocksTrafficAndUpstreams(t *testing.T) {
 	}
 }
 
+// TestDeletePartitionCascadesScenarioState is a regression test: deleting a
+// space used to leave that partition's scenario_state rows orphaned
+// forever, since DeletePartition's cascade never called ResetAllScenarios
+// (unlike the Reset use case, which does call it — see
+// internal/usecase/reset.go). It confirms ScenarioIndex is nonzero *before*
+// deleting the partition, so the post-delete zero can't be confused with
+// "there was never a row".
+func TestDeletePartitionCascadesScenarioState(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	if err := st.CreatePartition(ctx, domain.Partition{ID: "agent-a", CreatedAt: time.Now()}); err != nil {
+		t.Fatalf("CreatePartition(): %v", err)
+	}
+	if err := st.CreateMock(ctx, domain.Mock{
+		ID: "m1", Partition: "agent-a", Name: "m1", CreatedAt: time.Now(),
+		Action: domain.Action{Kind: domain.ActionRespond, Respond: &domain.RespondAction{Status: 200}},
+	}); err != nil {
+		t.Fatalf("CreateMock(): %v", err)
+	}
+	if _, err := st.AdvanceScenario(ctx, "agent-a", "m1"); err != nil {
+		t.Fatalf("AdvanceScenario(): %v", err)
+	}
+
+	// Confirm there really is something to clean up before deleting.
+	if idx, err := st.ScenarioIndex(ctx, "agent-a", "m1"); err != nil || idx == 0 {
+		t.Fatalf("ScenarioIndex() before delete = (%d, %v), want a nonzero index (a scenario_state row must exist)", idx, err)
+	}
+
+	if err := st.DeletePartition(ctx, "agent-a"); err != nil {
+		t.Fatalf("DeletePartition(): %v", err)
+	}
+
+	if idx, err := st.ScenarioIndex(ctx, "agent-a", "m1"); err != nil || idx != 0 {
+		t.Errorf("ScenarioIndex() after DeletePartition = (%d, %v), want (0, nil) — orphaned scenario_state row must be cleaned up", idx, err)
+	}
+}
+
+// TestDeletePartitionScenarioStateCascadeOnlyAffectsThatPartition proves the
+// ResetAllScenarios call added to DeletePartition's cascade is scoped
+// exactly to the deleted partition: another partition's scenario_state row
+// must survive untouched.
+func TestDeletePartitionScenarioStateCascadeOnlyAffectsThatPartition(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := st.AdvanceScenario(ctx, "agent-a", "m1"); err != nil {
+		t.Fatalf("AdvanceScenario(agent-a/m1): %v", err)
+	}
+	if _, err := st.AdvanceScenario(ctx, "agent-b", "m1"); err != nil {
+		t.Fatalf("AdvanceScenario(agent-b/m1): %v", err)
+	}
+
+	if err := st.DeletePartition(ctx, "agent-a"); err != nil {
+		t.Fatalf("DeletePartition(): %v", err)
+	}
+
+	if idx, err := st.ScenarioIndex(ctx, "agent-a", "m1"); err != nil || idx != 0 {
+		t.Errorf("ScenarioIndex(agent-a/m1) after DeletePartition(agent-a) = (%d, %v), want (0, nil)", idx, err)
+	}
+	if idx, err := st.ScenarioIndex(ctx, "agent-b", "m1"); err != nil || idx != 1 {
+		t.Errorf("ScenarioIndex(agent-b/m1) after DeletePartition(agent-a) = (%d, %v), want untouched 1", idx, err)
+	}
+}
+
 func TestDeletePartitionOnlyAffectsThatPartition(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()

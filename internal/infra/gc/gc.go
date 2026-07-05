@@ -18,11 +18,20 @@ type Pruner interface {
 	PruneExpiredEphemeralMocks(ctx context.Context, now time.Time) (int, error)
 }
 
+// Clock abstracts time.Now so tests can control the instant the sweep
+// compares TTL/retention windows against, without waiting on real wall-clock
+// time. Defined locally (mirroring Pruner's own rationale above and this
+// codebase's wider convention of consumer-side interfaces over a shared ports
+// package) rather than imported from usecase.Clock, so gc keeps zero
+// compile-time dependency on the usecase package.
+type Clock interface{ Now() time.Time }
+
 // Loop periodically sweeps expired traffic and ephemeral mocks.
 type Loop struct {
 	interval   time.Duration
 	trafficTTL time.Duration
 	store      Pruner
+	clock      Clock
 	log        *slog.Logger
 
 	cancel context.CancelFunc
@@ -30,8 +39,8 @@ type Loop struct {
 }
 
 // New builds a Loop. Call Start to begin sweeping and Stop to end it.
-func New(interval, trafficTTL time.Duration, store Pruner, log *slog.Logger) *Loop {
-	return &Loop{interval: interval, trafficTTL: trafficTTL, store: store, log: log}
+func New(interval, trafficTTL time.Duration, store Pruner, clock Clock, log *slog.Logger) *Loop {
+	return &Loop{interval: interval, trafficTTL: trafficTTL, store: store, clock: clock, log: log}
 }
 
 // Start begins the sweep loop in a background goroutine. It returns
@@ -66,7 +75,7 @@ func (l *Loop) Stop() {
 }
 
 func (l *Loop) sweep(ctx context.Context) {
-	now := time.Now()
+	now := l.clock.Now()
 
 	if n, err := l.store.PruneTraffic(ctx, now.Add(-l.trafficTTL)); err != nil {
 		l.log.Warn("gc: prune traffic failed", "err", err)

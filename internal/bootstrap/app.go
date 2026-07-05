@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -116,7 +117,9 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 		return nil, fmt.Errorf("bootstrap: store: %w", err)
 	}
 
-	sd, err := seeds.Load(cfg.SeedDir)
+	scriptEngine := scripting.New(cfg.ScriptTimeout)
+
+	sd, err := seeds.Load(cfg.SeedDir, scriptEngine)
 	if err != nil {
 		_ = st.Close()
 		return nil, fmt.Errorf("bootstrap: seeds: %w", err)
@@ -124,7 +127,7 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 	log.Info("seeds loaded",
 		"partitions", len(sd.Partitions), "mocks", len(sd.Mocks), "upstreams", len(sd.Upstreams))
 
-	gcLoop := gc.New(cfg.GCInterval, cfg.TrafficTTL, st, log)
+	gcLoop := gc.New(cfg.GCInterval, cfg.TrafficTTL, st, clock.System{}, log)
 	gcLoop.Start(ctx)
 
 	setUpstreamUC := usecase.NewSetUpstream(st)
@@ -136,7 +139,6 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 
 	matchEval := matcher.New()
 	templater := template.New()
-	scriptEngine := scripting.New(cfg.ScriptTimeout)
 	matchRequestUC := usecase.NewMatchRequest(st, sd, matchEval, scriptEngine, st)
 	matchTestUC := usecase.NewMatchTest(st, sd, matchEval, templater, st)
 	mockCRUDUC := usecase.NewMockCRUD(st, sd, matchEval, scriptEngine, idgen.UUID{}, clock.System{}, st)
@@ -310,11 +312,28 @@ func (a *App) ControlAddr() string { return a.controlListener.Addr().String() }
 // DataAddr returns the actual address the data-plane listener is bound to.
 func (a *App) DataAddr() string { return a.dataListener.Addr().String() }
 
-// Shutdown stops the GC loop, both HTTP servers, and closes the store.
+// Shutdown stops the GC loop, then both HTTP servers, and closes the store.
 // Canceling cancelServerCtx first releases any in-flight FaultTimeout
 // hijacked connection (see serveFault's doc comment) — Shutdown alone is
 // sufficient for that, independent of whatever context Run's original
 // caller happens to manage on its own.
+//
+// The two servers' Shutdown calls are launched concurrently (each a
+// goroutine, not sequential arguments) so they genuinely share the 10s
+// drain budget in parallel rather than one stealing it from the other:
+// Go evaluates function-call arguments left-to-right before invoking the
+// function, so passing them directly as errors.Join(a.controlServer.
+// Shutdown(shCtx), a.dataServer.Shutdown(shCtx), ...) would run
+// controlServer's shutdown to completion (or until shCtx expires) BEFORE
+// dataServer's shutdown even starts — leaving it with whatever sliver of
+// shCtx's shared deadline remains. A slow control-plane drain could then
+// starve the data-plane shutdown, which would return early (context
+// deadline exceeded) without its in-flight connections actually having
+// finished draining — and Store.Close() below would run regardless,
+// closing the store out from under a still-in-flight data-plane handler.
+// Waiting for both goroutines (wg.Wait()) before closing the store ensures
+// the store is only closed once both shutdown attempts have genuinely
+// completed.
 func (a *App) Shutdown(ctx context.Context) error {
 	if a.cancelServerCtx != nil {
 		a.cancelServerCtx()
@@ -322,9 +341,19 @@ func (a *App) Shutdown(ctx context.Context) error {
 	a.GC.Stop()
 	shCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return errors.Join(
-		a.controlServer.Shutdown(shCtx),
-		a.dataServer.Shutdown(shCtx),
-		a.Store.Close(),
-	)
+
+	var controlErr, dataErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		controlErr = a.controlServer.Shutdown(shCtx)
+	}()
+	go func() {
+		defer wg.Done()
+		dataErr = a.dataServer.Shutdown(shCtx)
+	}()
+	wg.Wait()
+
+	return errors.Join(controlErr, dataErr, a.Store.Close())
 }

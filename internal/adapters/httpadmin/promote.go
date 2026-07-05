@@ -3,6 +3,8 @@ package httpadmin
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 
 	"github.com/brienze1/lyrebird/internal/adapters/dto"
@@ -26,11 +28,11 @@ type promoteTrafficRequestDTO struct {
 func PromoteTraffic(uc promoteTrafficUseCase) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req promoteTrafficRequestDTO
-		if r.ContentLength != 0 {
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				writeJSONError(w, http.StatusBadRequest, err)
-				return
-			}
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeJSONError(w, http.StatusBadRequest, err)
+			return
 		}
 		partition := httpmw.PartitionFromContext(r.Context())
 		m, err := uc.Execute(r.Context(), usecase.PromoteTrafficInput{

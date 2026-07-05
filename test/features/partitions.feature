@@ -20,7 +20,8 @@ Feature: Multi-tenant isolation via spaces
   Scenario: A space's traffic never leaks into another space's listing
     Given a mock named "route" in space "space-a" matching GET path "/r" that responds 200 with body "ok"
     When I send a GET request to "/r" on the data plane with host "example.local" in partition "space-a"
-    Then no traffic is recorded in space "space-b"
+    Then traffic is recorded in space "space-a"
+    And no traffic is recorded in space "space-b"
 
   Scenario: Deleting a space cascades its mocks, traffic, and upstreams
     Given a mock named "route" in space "space-a" matching GET path "/r" that responds 200 with body "ok"
@@ -56,3 +57,4 @@ Feature: Multi-tenant isolation via spaces
     Then the MCP call succeeds
     When I call the MCP tool "delete_space" with arguments '{"id":"default"}'
     Then the MCP call fails with an explanatory error
+    And the MCP result text contains "default partition cannot be deleted"

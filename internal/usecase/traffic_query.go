@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/brienze1/lyrebird/internal/domain"
 )
@@ -16,8 +17,13 @@ type ListTraffic struct{ repo TrafficRepo }
 // NewListTraffic builds a ListTraffic use case.
 func NewListTraffic(repo TrafficRepo) *ListTraffic { return &ListTraffic{repo: repo} }
 
-// Execute returns recorded traffic in partition matching filter.
+// Execute returns recorded traffic in partition matching filter. A negative
+// filter.Limit is rejected (no legitimate meaning); filter.Limit == 0 is the
+// documented "unbounded" default and passes through unchanged.
 func (uc *ListTraffic) Execute(ctx context.Context, partition string, filter TrafficFilter) ([]domain.TrafficRecord, error) {
+	if filter.Limit < 0 {
+		return nil, fmt.Errorf("%w: limit must not be negative", domain.ErrInvalidTrafficFilter)
+	}
 	return uc.repo.ListTraffic(ctx, partition, filter)
 }
 

@@ -1,8 +1,6 @@
 package dto
 
 import (
-	"time"
-
 	"github.com/brienze1/lyrebird/internal/domain"
 	"github.com/brienze1/lyrebird/internal/usecase"
 )
@@ -39,7 +37,7 @@ type TrafficDetailDTO struct {
 // TrafficToSummaryDTO converts a domain.TrafficRecord to its wire summary.
 func TrafficToSummaryDTO(t domain.TrafficRecord) TrafficSummaryDTO {
 	return TrafficSummaryDTO{
-		ID: t.ID, Timestamp: t.Timestamp.UTC().Format(time.RFC3339Nano),
+		ID: t.ID, Timestamp: t.Timestamp.UTC().Format("2006-01-02T15:04:05.000Z"),
 		Method: t.Method, Host: t.Host, Path: t.Path,
 		Status: t.Status, LatencyMS: t.LatencyMS, Decision: string(t.Decision),
 		MatchedMockID: t.MatchedMockID,

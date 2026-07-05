@@ -57,3 +57,39 @@ func TestRenderHeaderCanonicalizesLookup(t *testing.T) {
 		t.Errorf("Render() = %q, want %q", got, "abc123")
 	}
 }
+
+func TestRenderQueryNameWithDotResolves(t *testing.T) {
+	e := New()
+	in := usecase.MatchInput{Query: map[string][]string{"filter.status": {"active"}}}
+	got := string(e.Render([]byte("{{request.query.filter.status}}"), in))
+	if got != "active" {
+		t.Errorf("Render() = %q, want %q", got, "active")
+	}
+}
+
+func TestRenderHeaderNameWithDotResolves(t *testing.T) {
+	e := New()
+	in := usecase.MatchInput{Header: map[string][]string{"X.custom": {"value"}}}
+	got := string(e.Render([]byte("{{request.header.X.Custom}}"), in))
+	if got != "value" {
+		t.Errorf("Render() = %q, want %q", got, "value")
+	}
+}
+
+func TestRenderMissingQueryParamBecomesEmptyString(t *testing.T) {
+	e := New()
+	in := usecase.MatchInput{Query: map[string][]string{"q": {"widgets"}}}
+	got := string(e.Render([]byte("[{{request.query.missing}}]"), in))
+	if got != "[]" {
+		t.Errorf("Render() = %q, want %q", got, "[]")
+	}
+}
+
+func TestRenderMultiValueQueryPicksFirst(t *testing.T) {
+	e := New()
+	in := usecase.MatchInput{Query: map[string][]string{"tag": {"first", "second"}}}
+	got := string(e.Render([]byte("{{request.query.tag}}"), in))
+	if got != "first" {
+		t.Errorf("Render() = %q, want %q", got, "first")
+	}
+}
