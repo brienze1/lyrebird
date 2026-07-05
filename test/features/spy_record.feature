@@ -16,6 +16,7 @@ Feature: Spy record and passthrough
     And the response header "X-Test" is "1"
     And the recorded traffic for that request has decision "proxied"
     And the recorded traffic response body is "hello"
+    And the recorded traffic response header "X-Test" is "1"
 
   Scenario: Upstream 5xx response is returned verbatim
     Given Lyrebird boots
@@ -24,6 +25,7 @@ Feature: Spy record and passthrough
     When I send a GET request to "/anything" on the data plane with host "example.local"
     Then the response status is 503
     And the response body is "upstream broken"
+    And the response header "X-Test" is "1"
     And the recorded traffic for that request has decision "proxied"
 
   Scenario: Unreachable upstream synthesizes a 502
@@ -63,6 +65,9 @@ Feature: Spy record and passthrough
   Scenario: Partition isolation for upstream resolution
     Given Lyrebird boots
     And an upstream "shared.local" configured in partition "team-a" pointing at a fake upstream
+    When I send a GET request to "/anything" on the data plane with host "shared.local" in partition "team-a"
+    Then the response status is 200
+    And the recorded traffic for that request has decision "proxied"
     When I send a GET request to "/anything" on the data plane with host "shared.local" in partition "team-b"
     Then the response status is 404
     And the response body contains "not_configured"

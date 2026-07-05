@@ -208,8 +208,19 @@ func MatchToDTO(m domain.Match) MatchDTO {
 }
 
 // ActionFromDTO converts an ActionDTO to its domain equivalent, or
-// domain.ErrInvalidMock if none of Respond/Proxy/Fault is set.
+// domain.ErrInvalidMock if zero or more than one of Respond/Proxy/Fault is
+// set.
 func ActionFromDTO(d ActionDTO) (domain.Action, error) {
+	set := 0
+	for _, isSet := range []bool{d.Respond != nil, d.Proxy != nil, d.Fault != nil} {
+		if isSet {
+			set++
+		}
+	}
+	if set > 1 {
+		return domain.Action{}, fmt.Errorf("%w: exactly one of action.respond/action.proxy/action.fault may be set", domain.ErrInvalidMock)
+	}
+
 	switch {
 	case d.Respond != nil:
 		return domain.Action{Kind: domain.ActionRespond, Respond: &domain.RespondAction{
@@ -266,6 +277,20 @@ func MockToDTO(m domain.Mock) MockDTO {
 		Lifetime: string(m.Lifetime), TTLSeconds: m.TTLSeconds,
 		Match: MatchToDTO(m.Match), Script: ScriptToDTO(m.Script), Action: ActionToDTO(m.Action),
 		Scenario: ScenarioToDTO(m.Scenario),
+	}
+}
+
+// NewMockDTOFromFields builds a MockDTO from a mock's settable fields
+// (everything but the server-assigned ID). httpadmin populates a MockDTO by
+// json.Decode-ing straight off the wire; adapters like mcp that define their
+// own parallel input schema (needed for jsonschema tags) still need to
+// construct a MockDTO to hand to MockInputFromDTO — this is the one place
+// that field mapping lives, instead of each such adapter hand-building the
+// struct literal itself.
+func NewMockDTOFromFields(name string, match MatchDTO, script *ScriptDTO, action ActionDTO, scenario *ScenarioDTO, priority int, group string, ttlSeconds *int, lifetime string) MockDTO {
+	return MockDTO{
+		Name: name, Priority: priority, Group: group, Lifetime: lifetime, TTLSeconds: ttlSeconds,
+		Match: match, Script: script, Action: action, Scenario: scenario,
 	}
 }
 

@@ -14,6 +14,14 @@ func UpstreamToDTO(u domain.Upstream) UpstreamDTO {
 	return UpstreamDTO{MatchHost: u.MatchHost, TargetURL: u.TargetURL, TLSSkipVerify: u.TLSSkipVerify}
 }
 
+// NewUpstreamDTOFromFields builds an UpstreamDTO from its settable fields —
+// for adapters (e.g. mcp) that define their own parallel input schema and
+// need to construct an UpstreamDTO rather than json.Decode one directly off
+// the wire the way httpadmin does.
+func NewUpstreamDTOFromFields(matchHost, targetURL string, tlsSkipVerify bool) UpstreamDTO {
+	return UpstreamDTO{MatchHost: matchHost, TargetURL: targetURL, TLSSkipVerify: tlsSkipVerify}
+}
+
 // UpstreamFromDTO converts an UpstreamDTO to its domain equivalent for partition.
 func UpstreamFromDTO(partition string, d UpstreamDTO) domain.Upstream {
 	return domain.Upstream{Partition: partition, MatchHost: d.MatchHost, TargetURL: d.TargetURL, TLSSkipVerify: d.TLSSkipVerify}

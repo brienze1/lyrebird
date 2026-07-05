@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -184,6 +186,74 @@ func TestListTrafficPathPrefixEscapesLikeMetacharacters(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].ID != "literal" {
 		t.Fatalf("ListTraffic(PathPrefix with literal %%) = %+v, want just [literal]", got)
+	}
+}
+
+// TestAppendTrafficConcurrentCallsAllPersist exercises AppendTraffic under
+// real concurrent load: the live proxy calls this method from many
+// goroutines simultaneously (one per in-flight HTTP request), so a lost or
+// corrupted write here would silently drop entries from the spy log. Each
+// goroutine appends a distinct, uniquely-identifiable record; after all
+// finish, ListTraffic must return exactly all of them, with each record's
+// distinguishing fields intact — proving no write is lost, duplicated, or
+// cross-contaminated with another record's fields under concurrent access.
+// Like TestAdvanceScenarioConcurrentCallsConsumeDistinctIndexes in
+// scenario_test.go, this proves Go-level race-freedom through store.Open's
+// single-connection pool (db.SetMaxOpenConns(1)), not multi-connection
+// SQLite atomicity.
+func TestAppendTrafficConcurrentCallsAllPersist(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	const n = 50
+	base := time.Now()
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rec := sampleTraffic(fmt.Sprintf("traffic-%d", i), "default", base.Add(time.Duration(i)*time.Millisecond))
+			rec.Status = 200 + i
+			rec.Path = fmt.Sprintf("/foo/%d", i)
+			errs[i] = st.AppendTraffic(ctx, rec)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("AppendTraffic() goroutine %d: %v", i, err)
+		}
+	}
+
+	got, err := st.ListTraffic(ctx, "default", usecase.TrafficFilter{Limit: n + 10})
+	if err != nil {
+		t.Fatalf("ListTraffic(): %v", err)
+	}
+	if len(got) != n {
+		t.Fatalf("ListTraffic() returned %d records, want %d (some concurrent writes lost or duplicated)", len(got), n)
+	}
+
+	byID := make(map[string]domain.TrafficRecord, n)
+	for _, rec := range got {
+		if _, dup := byID[rec.ID]; dup {
+			t.Fatalf("duplicate record id %q in ListTraffic() result", rec.ID)
+		}
+		byID[rec.ID] = rec
+	}
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("traffic-%d", i)
+		rec, ok := byID[id]
+		if !ok {
+			t.Fatalf("record %q missing from ListTraffic() result after concurrent AppendTraffic calls", id)
+		}
+		wantStatus := 200 + i
+		wantPath := fmt.Sprintf("/foo/%d", i)
+		if rec.Status != wantStatus || rec.Path != wantPath {
+			t.Errorf("record %q = {Status: %d, Path: %s}, want {Status: %d, Path: %s} (cross-contamination between concurrent writes)",
+				id, rec.Status, rec.Path, wantStatus, wantPath)
+		}
 	}
 }
 

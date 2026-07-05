@@ -1,6 +1,7 @@
 // Package usecase defines the application's use cases and the repository
-// ports they depend on. At M0 only the port interfaces existed; concrete
-// use-case implementations land starting at M1 (see specs/001-lyrebird/tasks.md).
+// ports they depend on: mock CRUD, request matching, traffic recording/
+// querying/promotion, scenarios, spaces, upstreams, reset, and explain, each
+// implemented against the port interfaces declared in this file.
 package usecase
 
 import (
@@ -19,11 +20,14 @@ type TrafficFilter struct {
 	Status     *int
 	Since      *time.Time
 	Until      *time.Time
-	// Limit bounds the number of rows returned (0 = unbounded). Applied at
-	// the SQL layer (a genuine LIMIT, not fetch-all-then-slice) since traffic
-	// volume, unlike mock count, can be large. Applied before the per-row
-	// decrypt-or-skip check (FR-029), so a caller asking for Limit=20 can
-	// legitimately get fewer than 20 rows back — not an off-by-one bug.
+	// Limit bounds the number of rows returned (0 = unbounded, the default
+	// when a caller doesn't specify one). Applied at the SQL layer (a
+	// genuine LIMIT, not fetch-all-then-slice) since traffic volume, unlike
+	// mock count, can be large. Applied before the per-row decrypt-or-skip
+	// check (FR-029), so a caller asking for Limit=20 can legitimately get
+	// fewer than 20 rows back — not an off-by-one bug. A negative Limit has
+	// no legitimate meaning and is rejected by ListTraffic.Execute with
+	// domain.ErrInvalidTrafficFilter before it ever reaches the repo.
 	Limit int
 }
 

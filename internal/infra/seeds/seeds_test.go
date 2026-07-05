@@ -9,6 +9,22 @@ import (
 	"github.com/brienze1/lyrebird/internal/domain"
 )
 
+// stubScriptValidator is a hand-rolled scriptValidator test double. It is
+// hand-rolled rather than reusing internal/adapters/scripting.Engine because
+// this package is infra and the real Engine lives in adapters — importing it
+// here would point the dependency arrow the wrong way even from a _test.go
+// file (see dependency-injection.md).
+type stubScriptValidator struct {
+	err error
+}
+
+func (s stubScriptValidator) ValidateScript(src string) error {
+	if src == "" {
+		return nil
+	}
+	return s.err
+}
+
 func writeSeedFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
@@ -17,7 +33,7 @@ func writeSeedFile(t *testing.T, dir, name, content string) {
 }
 
 func TestLoadMissingDirReturnsEmptySeeds(t *testing.T) {
-	s, err := Load(filepath.Join(t.TempDir(), "does-not-exist"))
+	s, err := Load(filepath.Join(t.TempDir(), "does-not-exist"), stubScriptValidator{})
 	if err != nil {
 		t.Fatalf("Load(): %v", err)
 	}
@@ -54,7 +70,7 @@ mocks:
         body: '{"error":{"code":"card_declined"}}'
 `)
 
-	s, err := Load(dir)
+	s, err := Load(dir, stubScriptValidator{})
 	if err != nil {
 		t.Fatalf("Load(): %v", err)
 	}
@@ -91,7 +107,7 @@ mocks:
 func TestLoadDefaultsToDefaultPartitionWhenSpaceOmitted(t *testing.T) {
 	dir := t.TempDir()
 	writeSeedFile(t, dir, "basic.yaml", "mocks:\n  - name: some-mock\n"+minimalAction)
-	s, err := Load(dir)
+	s, err := Load(dir, stubScriptValidator{})
 	if err != nil {
 		t.Fatalf("Load(): %v", err)
 	}
@@ -105,7 +121,7 @@ func TestLoadRejectsDuplicateMockNameInSamePartition(t *testing.T) {
 	writeSeedFile(t, dir, "a.yaml", "mocks:\n  - name: dup\n"+minimalAction)
 	writeSeedFile(t, dir, "b.yaml", "mocks:\n  - name: dup\n"+minimalAction)
 
-	_, err := Load(dir)
+	_, err := Load(dir, stubScriptValidator{})
 	if !errors.Is(err, domain.ErrDuplicateID) {
 		t.Fatalf("Load() with duplicate mock name = %v, want ErrDuplicateID", err)
 	}
@@ -116,7 +132,7 @@ func TestLoadAllowsSameMockNameInDifferentPartitions(t *testing.T) {
 	writeSeedFile(t, dir, "a.yaml", "space: team-a\nmocks:\n  - name: same-name\n"+minimalAction)
 	writeSeedFile(t, dir, "b.yaml", "space: team-b\nmocks:\n  - name: same-name\n"+minimalAction)
 
-	s, err := Load(dir)
+	s, err := Load(dir, stubScriptValidator{})
 	if err != nil {
 		t.Fatalf("Load(): %v", err)
 	}
@@ -133,7 +149,7 @@ func TestLoadDoesNotDuplicatePartitionsAcrossMultipleFilesInSameSpace(t *testing
 	writeSeedFile(t, dir, "a.yaml", "space: shared\nmocks:\n  - name: mock-a\n"+minimalAction)
 	writeSeedFile(t, dir, "b.yaml", "space: shared\nmocks:\n  - name: mock-b\n"+minimalAction)
 
-	s, err := Load(dir)
+	s, err := Load(dir, stubScriptValidator{})
 	if err != nil {
 		t.Fatalf("Load(): %v", err)
 	}
@@ -146,7 +162,7 @@ func TestLoadRejectsMockWithoutAction(t *testing.T) {
 	dir := t.TempDir()
 	writeSeedFile(t, dir, "a.yaml", "mocks:\n  - name: no-action\n")
 
-	if _, err := Load(dir); err == nil {
+	if _, err := Load(dir, stubScriptValidator{}); err == nil {
 		t.Fatal("Load() with a mock declaring no action, want error")
 	}
 }
@@ -155,8 +171,17 @@ func TestLoadRejectsMockNameContainingSlash(t *testing.T) {
 	dir := t.TempDir()
 	writeSeedFile(t, dir, "a.yaml", "mocks:\n  - name: bad/name\n"+minimalAction)
 
-	if _, err := Load(dir); err == nil {
+	if _, err := Load(dir, stubScriptValidator{}); err == nil {
 		t.Fatal("Load() with a mock name containing \"/\", want error (it becomes the mock's id, and GET/PUT/DELETE /mocks/{id} can't route a multi-segment id)")
+	}
+}
+
+func TestLoadRejectsUnknownFaultKind(t *testing.T) {
+	dir := t.TempDir()
+	writeSeedFile(t, dir, "a.yaml", "mocks:\n  - name: bad-fault\n    action:\n      fault:\n        kind: tiemout\n")
+
+	if _, err := Load(dir, stubScriptValidator{}); err == nil {
+		t.Fatal("Load() with an unknown action.fault.kind, want error")
 	}
 }
 
@@ -164,7 +189,87 @@ func TestLoadRejectsMalformedYAML(t *testing.T) {
 	dir := t.TempDir()
 	writeSeedFile(t, dir, "broken.yaml", "mocks: [this is not valid: yaml: structure")
 
-	if _, err := Load(dir); err == nil {
+	if _, err := Load(dir, stubScriptValidator{}); err == nil {
 		t.Fatal("Load() with malformed YAML, want error")
+	}
+}
+
+func TestLoadRejectsUnknownTopLevelKey(t *testing.T) {
+	dir := t.TempDir()
+	writeSeedFile(t, dir, "a.yaml", "bogus_key: true\nmocks:\n  - name: some-mock\n"+minimalAction)
+
+	if _, err := Load(dir, stubScriptValidator{}); err == nil {
+		t.Fatal("Load() with an unknown top-level key, want error (contracts/seed-config.md: unknown top-level keys are a startup error)")
+	}
+}
+
+func TestLoadWiresGroupScriptAndScenario(t *testing.T) {
+	dir := t.TempDir()
+	writeSeedFile(t, dir, "a.yaml", `
+mocks:
+  - name: stateful-mock
+    group: checkout
+    match:
+      method: GET
+      path: /orders
+    script:
+      match_src: "true"
+      respond_src: "'{}'"
+    action:
+      respond:
+        status: 200
+        body: "first"
+    scenario:
+      responses:
+        - status: 200
+          body: "first"
+        - status: 200
+          body: "second"
+      on_exhaust: wrap
+`)
+
+	s, err := Load(dir, stubScriptValidator{})
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if len(s.Mocks) != 1 {
+		t.Fatalf("Mocks = %d, want 1", len(s.Mocks))
+	}
+	m := s.Mocks[0]
+	if m.Group != "checkout" {
+		t.Errorf("Group = %q, want %q", m.Group, "checkout")
+	}
+	if m.Script == nil || m.Script.MatchSrc != "true" || m.Script.RespondSrc != "'{}'" {
+		t.Errorf("Script = %+v, unexpected", m.Script)
+	}
+	if m.Scenario == nil {
+		t.Fatal("Scenario = nil, want non-nil")
+	}
+	if m.Scenario.OnExhaust != domain.OnExhaustWrap {
+		t.Errorf("Scenario.OnExhaust = %q, want %q", m.Scenario.OnExhaust, domain.OnExhaustWrap)
+	}
+	if len(m.Scenario.Responses) != 2 {
+		t.Fatalf("Scenario.Responses = %d, want 2", len(m.Scenario.Responses))
+	}
+	if string(m.Scenario.Responses[0].Body) != "first" || string(m.Scenario.Responses[1].Body) != "second" {
+		t.Errorf("Scenario.Responses = %+v, unexpected", m.Scenario.Responses)
+	}
+}
+
+func TestLoadRejectsInvalidSeedScript(t *testing.T) {
+	dir := t.TempDir()
+	writeSeedFile(t, dir, "a.yaml", `
+mocks:
+  - name: bad-script
+    match:
+      method: GET
+      path: /orders
+    script:
+      match_src: "this is not valid js {{{"
+`+minimalAction)
+
+	_, err := Load(dir, stubScriptValidator{err: errors.New("script does not compile")})
+	if err == nil {
+		t.Fatal("Load() with an invalid script.match_src, want error")
 	}
 }

@@ -94,6 +94,31 @@ func TestOpenFailsOnCorruptOrTruncatedInput(t *testing.T) {
 	}
 }
 
+func TestOpenRejectsSingleBitFlipUnderSameKey(t *testing.T) {
+	key, _ := NewRandomKey()
+	s := mustSealer(t, key)
+
+	ct, err := s.Seal([]byte("secret payload"))
+	if err != nil {
+		t.Fatalf("Seal(): %v", err)
+	}
+
+	// Seal returns nonce||ciphertext||tag; flipping the last byte hits the
+	// tag region, proving the authentication tag rejects subtle single-bit
+	// tampering, not just gross corruption or a wrong key.
+	tampered := make([]byte, len(ct))
+	copy(tampered, ct)
+	tampered[len(tampered)-1] ^= 0x01
+
+	pt, err := s.Open(tampered)
+	if !errors.Is(err, ErrAuthFailed) {
+		t.Fatalf("Open(single-bit-flipped) err = %v, want ErrAuthFailed", err)
+	}
+	if pt != nil {
+		t.Fatalf("Open(single-bit-flipped) plaintext = %q, want nil", pt)
+	}
+}
+
 func TestNewRejectsWrongKeyLength(t *testing.T) {
 	if _, err := New([]byte("too-short")); err == nil {
 		t.Fatal("New() with a non-32-byte key, want error")

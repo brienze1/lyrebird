@@ -19,8 +19,8 @@ Feature: Mock overrides
   Scenario: Higher-priority mock wins on a shared route
     Given Lyrebird boots
     And an upstream "example.local" configured in partition "default" pointing at a fake upstream
-    And a mock named "low" with priority 1 matching GET path "/ping" that responds 200 with body "low"
     And a mock named "high" with priority 10 matching GET path "/ping" that responds 200 with body "high"
+    And a mock named "low" with priority 1 matching GET path "/ping" that responds 200 with body "low"
     When I send a GET request to "/ping" on the data plane with host "example.local"
     Then the response status is 200
     And the response body is "high"
@@ -89,3 +89,4 @@ Feature: Mock overrides
     Then the match-test winner is "ping" with status 200 and body "pong"
     When I request a match test for GET path "/other"
     Then the match-test has no winner
+    And no traffic is recorded in space "default"

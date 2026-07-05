@@ -39,7 +39,9 @@ Feature: MCP control plane
   Scenario: An invalid request returns an explanatory error, not a raw failure
     When I call the MCP tool "create_mock" with arguments '{"name":"bad","match":{"path":"~("},"action":{"respond":{"status":200,"body":"x"}}}'
     Then the MCP call fails with an explanatory error
+    And the MCP result text contains "path regex"
 
   Scenario: A mock cannot be created with a seeded lifetime via MCP
     When I call the MCP tool "create_mock" with arguments '{"name":"sneaky","lifetime":"seeded","match":{"method":"GET","path":"/x"},"action":{"respond":{"status":200,"body":"x"}}}'
     Then the MCP call fails with an explanatory error
+    And the MCP result text contains "lifetime must be"

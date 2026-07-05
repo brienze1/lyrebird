@@ -39,3 +39,22 @@ func TestMockInputFromDTOAcceptsEphemeralOrEmptyLifetime(t *testing.T) {
 		}
 	}
 }
+
+func TestActionFromDTORejectsNoneSet(t *testing.T) {
+	_, err := ActionFromDTO(ActionDTO{})
+	if !errors.Is(err, domain.ErrInvalidMock) {
+		t.Fatalf("ActionFromDTO(none set) = %v, want ErrInvalidMock", err)
+	}
+}
+
+func TestActionFromDTORejectsMultipleActionsSet(t *testing.T) {
+	d := ActionDTO{
+		Respond: &RespondDTO{Status: 200, Body: "pong"},
+		Proxy:   &ProxyDTO{},
+	}
+
+	_, err := ActionFromDTO(d)
+	if !errors.Is(err, domain.ErrInvalidMock) {
+		t.Fatalf("ActionFromDTO(respond+proxy set) = %v, want ErrInvalidMock", err)
+	}
+}

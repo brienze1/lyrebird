@@ -2,7 +2,7 @@ package mcp
 
 import (
 	"context"
-	"errors"
+	"fmt"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -37,7 +37,8 @@ type CreateMockIn struct {
 
 // GetMockIn is get_mock's input.
 type GetMockIn struct {
-	ID string `json:"id" jsonschema:"mock id, as returned by create_mock/list_mocks"`
+	Space string `json:"space,omitempty" jsonschema:"space/partition the mock lives in; defaults to the server's default space"`
+	ID    string `json:"id" jsonschema:"mock id, as returned by create_mock/list_mocks"`
 }
 
 // ListMocksIn is list_mocks's input.
@@ -83,8 +84,30 @@ type MatchTestIn struct {
 
 // explainErr wraps a use-case error via usecase.Explain into a plain error,
 // which the MCP SDK packs into a tool-level CallToolResult{IsError:true}.
+// Unlike httpadmin's writeUseCaseError, which maps Explained.Kind onto an
+// HTTP status code, an MCP tool error has no status-code slot to carry Kind
+// out of band — so Kind is tagged directly onto the message text instead,
+// the only way it can still reach the caller (usecase.ErrorKind exists "for
+// the adapter layer to map onto a transport-specific status (HTTP status
+// code, MCP tool error)" per internal/usecase/explain.go).
 func explainErr(err error) error {
-	return errors.New(usecase.Explain(err).Message)
+	explained := usecase.Explain(err)
+	return fmt.Errorf("%s: %s", kindTag(explained.Kind), explained.Message)
+}
+
+// kindTag renders a usecase.ErrorKind as the short lowercase tag prefixed
+// onto explainErr's message.
+func kindTag(k usecase.ErrorKind) string {
+	switch k {
+	case usecase.KindValidation:
+		return "validation"
+	case usecase.KindNotFound:
+		return "not_found"
+	case usecase.KindConflict:
+		return "conflict"
+	default:
+		return "internal"
+	}
 }
 
 func registerMockTools(s *sdkmcp.Server, deps Deps) {
@@ -97,10 +120,9 @@ func registerMockTools(s *sdkmcp.Server, deps Deps) {
 		// Lifetime is validated inside dto.MockInputFromDTO — shared with
 		// REST's CreateMock so a caller-supplied "seeded" is rejected
 		// identically on both adapters (constitution Principle II).
-		mockIn, err := dto.MockInputFromDTO(partition, dto.MockDTO{
-			Name: in.Name, Match: in.Match, Script: in.Script, Action: in.Action, Priority: in.Priority, Group: in.Group,
-			TTLSeconds: in.TTLSeconds, Lifetime: in.Lifetime, Scenario: in.Scenario,
-		})
+		mockIn, err := dto.MockInputFromDTO(partition, dto.NewMockDTOFromFields(
+			in.Name, in.Match, in.Script, in.Action, in.Scenario, in.Priority, in.Group, in.TTLSeconds, in.Lifetime,
+		))
 		if err != nil {
 			return nil, dto.MockDTO{}, explainErr(err)
 		}
@@ -115,7 +137,7 @@ func registerMockTools(s *sdkmcp.Server, deps Deps) {
 		Name:        "get_mock",
 		Description: `Fetch one mock by id. Example: {"id":"<mock-id>"}`,
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in GetMockIn) (*sdkmcp.CallToolResult, dto.MockDTO, error) {
-		partition := resolveSpace("", deps.DefaultSpace)
+		partition := resolveSpace(in.Space, deps.DefaultSpace)
 		m, err := deps.MockCRUD.Get(ctx, partition, in.ID)
 		if err != nil {
 			return nil, dto.MockDTO{}, explainErr(err)
@@ -145,10 +167,9 @@ func registerMockTools(s *sdkmcp.Server, deps Deps) {
 			`Example: {"id":"<mock-id>","name":"ping","match":{"method":"GET","path":"/ping"},"action":{"respond":{"status":200,"body":"pong"}}}`,
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in UpdateMockIn) (*sdkmcp.CallToolResult, dto.MockDTO, error) {
 		partition := resolveSpace(in.Space, deps.DefaultSpace)
-		mockIn, err := dto.MockInputFromDTO(partition, dto.MockDTO{
-			Name: in.Name, Match: in.Match, Script: in.Script, Action: in.Action, Priority: in.Priority, Group: in.Group,
-			TTLSeconds: in.TTLSeconds, Scenario: in.Scenario,
-		})
+		mockIn, err := dto.MockInputFromDTO(partition, dto.NewMockDTOFromFields(
+			in.Name, in.Match, in.Script, in.Action, in.Scenario, in.Priority, in.Group, in.TTLSeconds, "",
+		))
 		if err != nil {
 			return nil, dto.MockDTO{}, explainErr(err)
 		}

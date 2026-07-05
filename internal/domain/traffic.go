@@ -18,6 +18,12 @@ const (
 	// DecisionBlocked records that a request was refused by the proxy
 	// allow/deny host policy (FR-006) before any upstream was contacted.
 	DecisionBlocked Decision = "blocked"
+	// DecisionInternalError records that a generic internal error occurred
+	// outside any of the other specific failure modes above — a body-peek
+	// I/O failure, an upstream-list lookup failure, a scenario-advance
+	// failure, or a non-script-related match failure. A fail-safe outcome,
+	// still recorded so it's never invisible in the traffic log.
+	DecisionInternalError Decision = "internal_error"
 )
 
 // TrafficRecord is a recorded interaction. Request/Response are encrypted at

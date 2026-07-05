@@ -69,7 +69,10 @@ func (s *Store) GetTraffic(ctx context.Context, partition, id string) (domain.Tr
 
 // ListTraffic returns traffic records in partition matching filter, newest
 // first. A row that fails to decrypt is silently skipped, never surfaced as
-// a list error (FR-029).
+// a list error (FR-029). filter.Limit is assumed non-negative here: a
+// negative Limit is already rejected by usecase.ListTraffic.Execute before
+// this method is ever called, so the gate below only needs to distinguish
+// "positive" (apply LIMIT) from "0/unbounded" (no LIMIT clause).
 func (s *Store) ListTraffic(ctx context.Context, partition string, filter usecase.TrafficFilter) ([]domain.TrafficRecord, error) {
 	q := `SELECT id, "partition", "timestamp", method, host, path, status, latency_ms, decision,
 	             matched_mock_id, request_blob, response_blob

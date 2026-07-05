@@ -193,10 +193,13 @@ func (t *spyState) theFakeUpstreamReceivedABodyOfBytes(want int) error {
 }
 
 // lastTraffic fetches the most recently recorded traffic entry in the
-// partition the last request was sent to. Each scenario in this feature
-// sends exactly one data-plane request, so "the most recent record" and
-// "the record for that request" are the same thing — ListTraffic already
-// orders newest-first.
+// partition the last request was sent to. Every scenario in this feature
+// sends at most one data-plane request per distinct partition it asserts
+// against (the "Partition isolation" scenario sends two requests total, but
+// to two different partitions, one each) — so within whichever partition
+// t.lastPartition currently names, "the most recent record" and "the record
+// for that request" are still the same thing — ListTraffic already orders
+// newest-first.
 func (t *spyState) lastTraffic(ctx context.Context) (domain.TrafficRecord, error) {
 	list, err := t.s.app.Store.ListTraffic(ctx, t.lastPartition, usecase.TrafficFilter{})
 	if err != nil {
@@ -230,6 +233,25 @@ func (t *spyState) theRecordedTrafficResponseBodyIs(ctx context.Context, want st
 	}
 	if string(msg.Body) != want {
 		return fmt.Errorf("recorded response body = %q, want %q", msg.Body, want)
+	}
+	return nil
+}
+
+func (t *spyState) theRecordedTrafficResponseHeaderIs(ctx context.Context, name, want string) error {
+	tr, err := t.lastTraffic(ctx)
+	if err != nil {
+		return err
+	}
+	msg, err := usecase.DecodeRecordedMessage(tr.Response)
+	if err != nil {
+		return fmt.Errorf("decode recorded response: %w", err)
+	}
+	vals := msg.Headers[name]
+	if len(vals) == 0 {
+		return fmt.Errorf("recorded response header %q is absent, want %q", name, want)
+	}
+	if vals[0] != want {
+		return fmt.Errorf("recorded response header %q = %q, want %q", name, vals[0], want)
 	}
 	return nil
 }
@@ -307,6 +329,7 @@ func RegisterSpySteps(sc *godog.ScenarioContext, s *appState) {
 
 	sc.Step(`^the recorded traffic for that request has decision "([^"]*)"$`, t.theRecordedTrafficForThatRequestHasDecision)
 	sc.Step(`^the recorded traffic response body is "([^"]*)"$`, t.theRecordedTrafficResponseBodyIs)
+	sc.Step(`^the recorded traffic response header "([^"]*)" is "([^"]*)"$`, t.theRecordedTrafficResponseHeaderIs)
 	sc.Step(`^the recorded traffic request body is truncated$`, t.theRecordedTrafficRequestBodyIsTruncated)
 	sc.Step(`^the recorded traffic request body_total_size is (\d+)$`, t.theRecordedTrafficRequestBodyTotalSizeIs)
 

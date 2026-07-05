@@ -46,6 +46,9 @@ func (uc *MockCRUD) validate(in MockInput) error {
 	if in.Name == "" {
 		return fmt.Errorf("%w: name is required", domain.ErrInvalidMock)
 	}
+	if in.TTLSeconds != nil && *in.TTLSeconds <= 0 {
+		return fmt.Errorf("%w: ttl_seconds must be a positive number of seconds, or omitted", domain.ErrInvalidMock)
+	}
 	if err := validateAction(in.Action); err != nil {
 		return err
 	}
@@ -103,6 +106,11 @@ func validateAction(a domain.Action) error {
 	case domain.ActionFault:
 		if a.Fault == nil {
 			return fmt.Errorf("%w: action kind fault requires a fault body", domain.ErrInvalidMock)
+		}
+		switch a.Fault.Kind {
+		case domain.FaultDelay, domain.FaultReset, domain.FaultTimeout, domain.FaultMalformed:
+		default:
+			return fmt.Errorf("%w: unknown fault.kind %q", domain.ErrInvalidMock, a.Fault.Kind)
 		}
 	default:
 		return fmt.Errorf("%w: unknown action kind %q", domain.ErrInvalidMock, a.Kind)
@@ -205,7 +213,7 @@ func (uc *MockCRUD) Update(ctx context.Context, partition, id string, in MockInp
 	// The update itself already succeeded above; a failure here is
 	// deliberately not propagated as this call's error (matching the
 	// "never fail an already-completed operation for a best-effort
-	// cleanup step" convention used elsewhere, e.g. proxy.Handler.recordAsync) —
+	// cleanup step" convention used elsewhere, e.g. proxy.Handler.recordTraffic) —
 	// worst case a stale scenario index lingers, which AdvanceScenario's
 	// own clamping/wrap logic already tolerates.
 	_ = uc.scenario.ResetScenario(ctx, partition, id)

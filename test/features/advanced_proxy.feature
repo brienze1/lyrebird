@@ -48,13 +48,13 @@ Feature: Advanced proxy & fault injection
     Given Lyrebird boots
     And a mock named "garbage" matching GET path "/garbage" with fault kind "malformed"
     When I send a GET request to "/garbage" on the data plane with host "example.local" with a client timeout of "2s"
-    Then the request fails
+    Then the request fails with a malformed response error
 
   Scenario: A reset fault closes the connection immediately
     Given Lyrebird boots
     And a mock named "abrupt" matching GET path "/abrupt" with fault kind "reset"
     When I send a GET request to "/abrupt" on the data plane with host "example.local" with a client timeout of "2s"
-    Then the request fails within "500ms"
+    Then the request fails with a connection reset error within "500ms"
 
   Scenario: A timeout fault never responds until the client gives up
     Given Lyrebird boots

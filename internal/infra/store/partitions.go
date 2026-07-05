@@ -67,26 +67,69 @@ func (s *Store) ListPartitions(ctx context.Context) ([]domain.Partition, error) 
 	return out, rows.Err()
 }
 
-// DeletePartition cascades id's ephemeral mocks, recorded traffic, and
-// upstream configuration in one operation (FR-024), then removes the
-// partition's own registration row. Callers MUST reject
+// DeletePartition cascades id's ephemeral mocks, recorded traffic, upstream
+// configuration, and scenario state in one operation (FR-024), then removes
+// the partition's own registration row. Callers MUST reject
 // domain.DefaultPartitionID before calling — this method does not
-// special-case it. Steps run sequentially without an explicit transaction,
-// matching Reset's own accepted trade-off: SQLite's single-connection
-// serialization (Open already sets db.SetMaxOpenConns(1)) plus Principle
-// III's disposability discipline make that acceptable here too.
+// special-case it.
+//
+// All 5 steps run inside a single transaction (BeginTx/Commit, the same
+// convention PruneExpiredEphemeralMocks already established in store.go)
+// rather than as 5 separate statements each independently checking out and
+// releasing db.SetMaxOpenConns(1)'s sole connection. The previous sequential
+// (no-tx) design was deliberately accepted as a trade-off for the crash-
+// mid-cascade case (matching Reset's own accepted trade-off — a crash
+// leaves at most a partial cleanup, and Principle III's disposability
+// discipline makes that fine) but was never stress-tested against a
+// different hazard: a concurrent CreateMock/AppendTraffic/SetUpstream/
+// AdvanceScenario call targeting this exact partition id, landing in the
+// gap between an earlier step (e.g. the ephemeral_mocks delete) and a later
+// one (e.g. the final `DELETE FROM partitions`). A stress test
+// (partitions_race_stress_test.go) confirmed that gap is real and
+// reproducible: such a write permanently resurrects a row for a partition
+// id that GetPartition will report as gone, with nothing ever scheduled to
+// clean it up again — a genuine registry/data desync, not just an inert
+// leaked row. Holding the sole connection for the whole cascade closes this:
+// any concurrent writer's own ExecContext simply blocks (waiting for a
+// connection from the pool) until this transaction commits, then runs
+// cleanly against a partition that is either not-yet-deleted
+// (indistinguishable from calling it before DeletePartition started) or
+// fully-deleted (recreating a mock/traffic/upstream/scenario row in a
+// since-deleted ad hoc space id — explicitly legitimate per
+// usecase.DeleteSpace's own doc comment) — never a half-deleted state.
+//
+// The 4 per-table deletes are inlined here directly against the *sql.Tx
+// rather than calling DeleteMocksByPartition/ResetAllScenarios/
+// ClearTraffic/DeleteUpstreamsByPartition: those methods run against s.db
+// (not a caller-supplied transaction) and are independently used standalone
+// elsewhere (internal/usecase/reset.go, via the ScenarioStateRepo/
+// MockRepo/TrafficRepo/UpstreamRepo port interfaces) — inlining here keeps
+// their existing signatures and standalone behavior completely untouched.
 func (s *Store) DeletePartition(ctx context.Context, id string) error {
-	if err := s.DeleteMocksByPartition(ctx, id); err != nil {
-		return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: delete partition: begin tx: %w", err)
 	}
-	if err := s.ClearTraffic(ctx, id); err != nil {
-		return err
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM ephemeral_mocks WHERE "partition" = ?`, id); err != nil {
+		return fmt.Errorf("store: delete partition: delete mocks: %w", err)
 	}
-	if err := s.DeleteUpstreamsByPartition(ctx, id); err != nil {
-		return err
+	if _, err := tx.ExecContext(ctx, `DELETE FROM scenario_state WHERE "partition" = ?`, id); err != nil {
+		return fmt.Errorf("store: delete partition: reset scenarios: %w", err)
 	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM partitions WHERE id = ?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM traffic WHERE "partition" = ?`, id); err != nil {
+		return fmt.Errorf("store: delete partition: clear traffic: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM upstreams WHERE "partition" = ?`, id); err != nil {
+		return fmt.Errorf("store: delete partition: delete upstreams: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM partitions WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("store: delete partition: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: delete partition: commit tx: %w", err)
 	}
 	return nil
 }

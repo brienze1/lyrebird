@@ -24,6 +24,18 @@ func (t *scriptingState) aMockNamedMatchingPathWithScriptRespondSrcThatResponds(
 	})
 }
 
+func (t *scriptingState) aMockNamedMatchingPathWithScriptMatchSrcThatResponds(
+	ctx context.Context, name, method, path, matchSrc string, status int,
+) error {
+	m := &mockState{s: t.s}
+	return m.createMock(ctx, mockDTO{
+		Name:   name,
+		Match:  matchDTO{Method: method, Path: path},
+		Script: &scriptDTO{MatchSrc: matchSrc},
+		Action: actionDTO{Respond: &respondDTO{Status: status}},
+	})
+}
+
 // RegisterScriptingSteps wires scripting.feature's mock-creation step
 // against the shared appState s. Request-sending and response/traffic
 // assertions are reused verbatim from steps_spy.go/steps_mock.go.
@@ -32,4 +44,7 @@ func RegisterScriptingSteps(sc *godog.ScenarioContext, s *appState) {
 
 	sc.Step(`^a mock named "([^"]*)" matching (GET|POST|PUT|PATCH|DELETE) path "([^"]*)" with script\.respond_src "([^"]*)" that responds (\d+)$`,
 		t.aMockNamedMatchingPathWithScriptRespondSrcThatResponds)
+
+	sc.Step(`^a mock named "([^"]*)" matching (GET|POST|PUT|PATCH|DELETE) path "([^"]*)" with script\.match_src "([^"]*)" that responds (\d+)$`,
+		t.aMockNamedMatchingPathWithScriptMatchSrcThatResponds)
 }

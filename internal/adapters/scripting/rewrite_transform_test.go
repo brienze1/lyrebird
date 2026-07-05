@@ -1,6 +1,7 @@
 package scripting
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -60,6 +61,45 @@ func TestEvalRewriteRequestRejectsANonObjectReturnValue(t *testing.T) {
 	}
 }
 
+func TestEvalRewriteRequestTreatsNullHeadersAsNoChange(t *testing.T) {
+	e := New(100 * time.Millisecond)
+	got, err := e.EvalRewriteRequest(`({headers: null, body: "keep-mine"})`, usecase.MatchInput{})
+	if err != nil {
+		t.Fatalf("EvalRewriteRequest(): %v", err)
+	}
+	if got.Headers != nil {
+		t.Errorf("Headers = %+v, want nil (no header changes)", got.Headers)
+	}
+	if !got.BodySet || string(got.Body) != "keep-mine" {
+		t.Errorf("Body/BodySet = %q/%v, want %q/true", got.Body, got.BodySet, "keep-mine")
+	}
+}
+
+func TestEvalRewriteRequestTreatsUndefinedHeadersAsNoChange(t *testing.T) {
+	e := New(100 * time.Millisecond)
+	got, err := e.EvalRewriteRequest(`({headers: undefined, body: "keep-mine"})`, usecase.MatchInput{})
+	if err != nil {
+		t.Fatalf("EvalRewriteRequest(): %v", err)
+	}
+	if got.Headers != nil {
+		t.Errorf("Headers = %+v, want nil (no header changes)", got.Headers)
+	}
+	if !got.BodySet || string(got.Body) != "keep-mine" {
+		t.Errorf("Body/BodySet = %q/%v, want %q/true", got.Body, got.BodySet, "keep-mine")
+	}
+}
+
+func TestEvalRewriteRequestRejectsANonObjectHeaders(t *testing.T) {
+	e := New(100 * time.Millisecond)
+	_, err := e.EvalRewriteRequest(`({headers: ["a", "b"]})`, usecase.MatchInput{})
+	if err == nil {
+		t.Fatal("EvalRewriteRequest() with headers as an array = nil error, want an error")
+	}
+	if !strings.Contains(err.Error(), "headers") {
+		t.Errorf("err = %q, want it to mention \"headers\"", err.Error())
+	}
+}
+
 func TestEvalTransformResponseSeesRespGlobalAndChangesBody(t *testing.T) {
 	e := New(100 * time.Millisecond)
 	got, err := e.EvalTransformResponse(
@@ -88,6 +128,51 @@ func TestEvalTransformResponseChangesStatusAndHeaders(t *testing.T) {
 	}
 	if len(got.Headers["X-Transformed"]) != 1 || got.Headers["X-Transformed"][0] != "yes" {
 		t.Errorf("Headers = %+v, want X-Transformed=yes", got.Headers)
+	}
+}
+
+func TestEvalTransformResponseTreatsNullHeadersAsNoChange(t *testing.T) {
+	e := New(100 * time.Millisecond)
+	got, err := e.EvalTransformResponse(
+		`({headers: null, body: "keep-mine"})`,
+		usecase.TransformInput{Status: 200},
+	)
+	if err != nil {
+		t.Fatalf("EvalTransformResponse(): %v", err)
+	}
+	if got.Headers != nil {
+		t.Errorf("Headers = %+v, want nil (no header changes)", got.Headers)
+	}
+	if !got.BodySet || string(got.Body) != "keep-mine" {
+		t.Errorf("Body/BodySet = %q/%v, want %q/true", got.Body, got.BodySet, "keep-mine")
+	}
+}
+
+func TestEvalTransformResponseTreatsUndefinedHeadersAsNoChange(t *testing.T) {
+	e := New(100 * time.Millisecond)
+	got, err := e.EvalTransformResponse(
+		`({headers: undefined, body: "keep-mine"})`,
+		usecase.TransformInput{Status: 200},
+	)
+	if err != nil {
+		t.Fatalf("EvalTransformResponse(): %v", err)
+	}
+	if got.Headers != nil {
+		t.Errorf("Headers = %+v, want nil (no header changes)", got.Headers)
+	}
+	if !got.BodySet || string(got.Body) != "keep-mine" {
+		t.Errorf("Body/BodySet = %q/%v, want %q/true", got.Body, got.BodySet, "keep-mine")
+	}
+}
+
+func TestEvalTransformResponseRejectsANonObjectHeaders(t *testing.T) {
+	e := New(100 * time.Millisecond)
+	_, err := e.EvalTransformResponse(`({headers: ["a", "b"]})`, usecase.TransformInput{Status: 200})
+	if err == nil {
+		t.Fatal("EvalTransformResponse() with headers as an array = nil error, want an error")
+	}
+	if !strings.Contains(err.Error(), "headers") {
+		t.Errorf("err = %q, want it to mention \"headers\"", err.Error())
 	}
 }
 

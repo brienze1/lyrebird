@@ -1,7 +1,3 @@
-// Package proxy implements Lyrebird's data-plane spy/passthrough engine:
-// resolving the configured Upstream for an incoming request and forwarding
-// to it verbatim via net/http/httputil.ReverseProxy, per
-// specs/001-lyrebird/contracts/data-plane.md.
 package proxy
 
 import (

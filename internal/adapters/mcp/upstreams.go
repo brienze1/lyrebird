@@ -33,7 +33,7 @@ func registerUpstreamTools(s *sdkmcp.Server, deps Deps) {
 			`Example: {"match_host":"api.example.com","target_url":"https://api.example.com"}`,
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in SetUpstreamIn) (*sdkmcp.CallToolResult, dto.UpstreamDTO, error) {
 		partition := resolveSpace(in.Space, deps.DefaultSpace)
-		d := dto.UpstreamDTO{MatchHost: in.MatchHost, TargetURL: in.TargetURL, TLSSkipVerify: in.TLSSkipVerify}
+		d := dto.NewUpstreamDTOFromFields(in.MatchHost, in.TargetURL, in.TLSSkipVerify)
 		if err := deps.SetUpstream.Execute(ctx, dto.UpstreamFromDTO(partition, d)); err != nil {
 			return nil, dto.UpstreamDTO{}, explainErr(err)
 		}

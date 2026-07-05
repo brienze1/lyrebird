@@ -26,21 +26,21 @@ US7=M6, recipe library=M5. Setup+Foundational = M0.
 
 ## Phase 1: Setup (Shared Infrastructure) — M0
 
-- [ ] T001 [SETUP] Initialize Go module `github.com/brienze/lyrebird` (go 1.25+) and create the
+- [x] T001 [SETUP] Initialize Go module `github.com/brienze1/lyrebird` (go 1.25+) and create the
   clean-arch directory skeleton (`cmd/lyrebird`, `internal/domain`, `internal/usecase`,
   `internal/adapters/{mcp,httpadmin,proxy,matcher,scripting,template,examples}`,
   `internal/infra/{store,seeds,crypto,auth,gc}`, `test/{features,support}`).
-- [ ] T002 [P] [SETUP] Add base dependencies to go.mod: goja, modernc.org/sqlite, golang-jwt/v5,
+- [x] T002 [P] [SETUP] Add base dependencies to go.mod: goja, modernc.org/sqlite, golang-jwt/v5,
   yaml.v3, godog, official Go MCP SDK; run `go mod tidy`.
-- [ ] T003 [P] [SETUP] Configure `golangci-lint` (`.golangci.yml`), `go vet`, and `gofmt` settings.
-- [ ] T004 [P] [SETUP] Multi-stage `Dockerfile` (`CGO_ENABLED=0` build → `scratch`/distroless),
+- [x] T003 [P] [SETUP] Configure `golangci-lint` (`.golangci.yml`), `go vet`, and `gofmt` settings.
+- [x] T004 [P] [SETUP] Multi-stage `Dockerfile` (`CGO_ENABLED=0` build → `scratch`/distroless),
   `.dockerignore`, and `docker-compose.yml` local example exposing `:8080` (data) + `:9090` (control).
-- [ ] T005 [P] [SETUP] `.github/workflows/ci.yml` — PR gate: `go vet`, `golangci-lint`, `go test`
+- [x] T005 [P] [SETUP] `.github/workflows/ci.yml` — PR gate: `go vet`, `golangci-lint`, `go test`
   (incl. godog), and a `docker build` (no push).
-- [ ] T006 [P] [SETUP] `.github/workflows/release.yml` — on push to `main`/`v*` tags: Buildx
+- [x] T006 [P] [SETUP] `.github/workflows/release.yml` — on push to `main`/`v*` tags: Buildx
   multi-arch (amd64+arm64) build + push to GHCR with metadata-action tags + GHA cache;
   `permissions: { contents: read, packages: write }`.
-- [ ] T007 [P] [SETUP] godog test harness under `test/support` (runner wiring + empty step registry)
+- [x] T007 [P] [SETUP] godog test harness under `test/support` (runner wiring + empty step registry)
   and a `README` note on running the BDD suite.
 
 **Checkpoint**: `go build ./...` succeeds; empty CI is green; image builds.
@@ -51,29 +51,29 @@ US7=M6, recipe library=M5. Setup+Foundational = M0.
 
 **⚠️ No user-story work may begin until this phase is complete.**
 
-- [ ] T008 [FOUND] Define dependency-free domain entities in `internal/domain/`: `Partition`,
+- [x] T008 [FOUND] Define dependency-free domain entities in `internal/domain/`: `Partition`,
   `Upstream`, `Mock`, `Match`, `Matcher`, `Action` (respond/proxy/fault), `Script`, `Scenario`,
   `TrafficRecord` per data-model.md (no imports from adapters/infra).
-- [ ] T009 [FOUND] Define repository/port interfaces in `internal/usecase/ports.go`
+- [x] T009 [FOUND] Define repository/port interfaces in `internal/usecase/ports.go`
   (MockRepo, TrafficRepo, PartitionRepo, UpstreamRepo, ScenarioStateRepo, Clock, IDGen).
-- [ ] T010 [FOUND] Env/config loader in `cmd/lyrebird` + `internal/infra/config` (`LYREBIRD_*`:
+- [x] T010 [FOUND] Env/config loader in `cmd/lyrebird` + `internal/infra/config` (`LYREBIRD_*`:
   TRAFFIC_TTL, DEFAULT_SPACE, ALLOW_PROXY_HOSTS, AUTH_KEYS, TOKEN_TTL, DATA_KEY, ports, body cap).
-- [ ] T011 [FOUND] At-rest crypto in `internal/infra/crypto`: AES-256-GCM seal/open with per-record
+- [x] T011 [FOUND] At-rest crypto in `internal/infra/crypto`: AES-256-GCM seal/open with per-record
   nonce; key = random-at-startup or base64 `LYREBIRD_DATA_KEY`; unit tests for round-trip + wrong-key.
-- [ ] T012 [FOUND] SQLite store in `internal/infra/store` (modernc.org/sqlite): schema/migrations for
+- [x] T012 [FOUND] SQLite store in `internal/infra/store` (modernc.org/sqlite): schema/migrations for
   `partitions`, `upstreams`, `ephemeral_mocks`, `traffic`, `scenario_state`; encrypt 🔒 payload
   columns via T011; plaintext index columns (partition/method/host/path/status/timestamp).
-- [ ] T013 [P] [FOUND] Structured logging + error-handling infra that NEVER logs secret material
+- [x] T013 [P] [FOUND] Structured logging + error-handling infra that NEVER logs secret material
   (tokens/keys/client secrets) — Principle V.
-- [ ] T014 [FOUND] Partition-resolution middleware (`X-Lyrebird-Space` → default) shared by data and
+- [x] T014 [FOUND] Partition-resolution middleware (`X-Lyrebird-Space` → default) shared by data and
   control planes.
-- [ ] T015 [FOUND] Seed loader in `internal/infra/seeds`: read `/config/*.yaml` at boot into in-memory
+- [x] T015 [FOUND] Seed loader in `internal/infra/seeds`: read `/config/*.yaml` at boot into in-memory
   seeded mocks/partitions/upstreams (protected from reset/GC); duplicate-id = startup error.
-- [ ] T016 [FOUND] GC loop in `internal/infra/gc`: prune traffic older than `LYREBIRD_TRAFFIC_TTL`
+- [x] T016 [FOUND] GC loop in `internal/infra/gc`: prune traffic older than `LYREBIRD_TRAFFIC_TTL`
   and expired ephemeral mocks on an interval.
-- [ ] T017 [FOUND] Wire `cmd/lyrebird` main: start data-plane listener(s) + control-plane listener,
+- [x] T017 [FOUND] Wire `cmd/lyrebird` main: start data-plane listener(s) + control-plane listener,
   load seeds, start GC; `/__lyrebird/healthz` + `/readyz` (never authed).
-- [ ] T066 [FOUND] Disposability test (write first, must fail): `test/features/disposability.feature`
+- [x] T066 [FOUND] Disposability test (write first, must fail): `test/features/disposability.feature`
   — booting against an empty DB, a wiped DB, or one written with a different at-rest key MUST start
   healthy and treat prior data as absent (never as corruption); seeded mocks still load from
   `/config`. Implement graceful-open behavior in the store to satisfy FR-029.
@@ -90,22 +90,22 @@ hold full request + full upstream response. **Independent test**: quickstart Sce
 
 ### Tests (write first, must fail)
 
-- [ ] T018 [P] [US1] `test/features/spy_record.feature` covering FR-001/002/003 + SC-001 and the
+- [x] T018 [P] [US1] `test/features/spy_record.feature` covering FR-001/002/003 + SC-001 and the
   edge cases: upstream 5xx verbatim, upstream-unreachable → 502/504, no-upstream → not_configured,
   large body streamed but recording truncated at cap.
-- [ ] T019 [P] [US1] In-memory upstream test double + step defs in `test/support`.
+- [x] T019 [P] [US1] In-memory upstream test double + step defs in `test/support`.
 
 ### Implementation
 
-- [ ] T020 [US1] `RecordTraffic` use-case in `internal/usecase` (persist request; truncate recorded
+- [x] T020 [US1] `RecordTraffic` use-case in `internal/usecase` (persist request; truncate recorded
   body above cap with marker; stream body through unbounded).
-- [ ] T021 [US1] Upstream resolution + reverse-proxy passthrough in `internal/adapters/proxy`
+- [x] T021 [US1] Upstream resolution + reverse-proxy passthrough in `internal/adapters/proxy`
   (`httputil.ReverseProxy`): forward, capture full real response, verbatim return; synthesize 502/504
   on transport failure; not_configured path.
-- [ ] T022 [US1] `DecideMockOrProxy` skeleton (no mocks yet → always spy) wiring proxy + RecordTraffic
+- [x] T022 [US1] `DecideMockOrProxy` skeleton (no mocks yet → always spy) wiring proxy + RecordTraffic
   in the data-plane handler.
-- [ ] T023 [US1] `set_upstream`/`list_upstreams` (usecase + Admin REST `/__lyrebird/upstreams`).
-- [ ] T024 [US1] Traffic read path: `list_traffic` + `get_traffic` (decrypt) over Admin REST.
+- [x] T023 [US1] `set_upstream`/`list_upstreams` (usecase + Admin REST `/__lyrebird/upstreams`).
+- [x] T024 [US1] Traffic read path: `list_traffic` + `get_traffic` (decrypt) over Admin REST.
 
 **Checkpoint**: spy works end-to-end; T018 passes; a recording proxy you can point anything at.
 
@@ -118,20 +118,20 @@ by priority (ties → newest wins). **Independent test**: quickstart Scenario B.
 
 ### Tests (write first, must fail)
 
-- [ ] T025 [P] [US2] `test/features/mock_override.feature`: FR-007/008/009/009a/010/013 + SC-003
+- [x] T025 [P] [US2] `test/features/mock_override.feature`: FR-007/008/009/009a/010/013 + SC-003
   (mock fires, upstream sees zero calls), priority ordering, tie-break newest-wins, validation-as-rule.
 
 ### Implementation
 
-- [ ] T026 [P] [US2] Declarative matcher in `internal/adapters/matcher` (method/path exact|glob|regex/
+- [x] T026 [P] [US2] Declarative matcher in `internal/adapters/matcher` (method/path exact|glob|regex/
   headers/query/body-JSONPath; AND semantics).
-- [ ] T027 [P] [US2] Response templating in `internal/adapters/template` (inject request values).
-- [ ] T028 [US2] `MatchRequest` use-case: select candidates by partition, order priority desc →
+- [x] T027 [P] [US2] Response templating in `internal/adapters/template` (inject request values).
+- [x] T028 [US2] `MatchRequest` use-case: select candidates by partition, order priority desc →
   created_at desc → id; first match wins (FR-009a).
-- [ ] T029 [US2] Extend `DecideMockOrProxy`: matched respond/fault → build+return; else spy (US1).
-- [ ] T030 [US2] Mock CRUD use-cases + Admin REST (`/__lyrebird/mocks`), seeded vs ephemeral + TTL
+- [x] T029 [US2] Extend `DecideMockOrProxy`: matched respond/fault → build+return; else spy (US1).
+- [x] T030 [US2] Mock CRUD use-cases + Admin REST (`/__lyrebird/mocks`), seeded vs ephemeral + TTL
   field; persist ephemeral to SQLite.
-- [ ] T031 [US2] `match_test` use-case + Admin REST endpoint (per-condition pass/fail, resulting
+- [x] T031 [US2] `match_test` use-case + Admin REST endpoint (per-condition pass/fail, resulting
   response, no forwarding) — FR-011.
 
 **Checkpoint**: mock-some/passthrough-rest works; T025 passes.
@@ -145,21 +145,21 @@ capture→mock. **Independent test**: quickstart Scenario C.
 
 ### Tests (write first, must fail)
 
-- [ ] T032 [P] [US3] `test/features/mcp_control.feature`: guide returns a usable example; create→
+- [x] T032 [P] [US3] `test/features/mcp_control.feature`: guide returns a usable example; create→
   match_test→fire in ≤5 ops (SC-002); promote_traffic reproduces recording with full fidelity (SC-005);
   invalid request → explanatory error (FR-020).
 
 ### Implementation
 
-- [ ] T033 [US3] MCP server adapter in `internal/adapters/mcp` (Streamable HTTP + stdio) wired over
+- [x] T033 [US3] MCP server adapter in `internal/adapters/mcp` (Streamable HTTP + stdio) wired over
   the SAME use-cases as REST (no duplicated logic — Principle II).
-- [ ] T034 [P] [US3] MCP mock/upstream tools: `create_mock`,`get_mock`,`list_mocks`,`update_mock`,
+- [x] T034 [P] [US3] MCP mock/upstream tools: `create_mock`,`get_mock`,`list_mocks`,`update_mock`,
   `delete_mock`,`reset`,`match_test`,`set_upstream`,`list_upstreams` with rich descriptions + examples.
-- [ ] T035 [P] [US3] MCP spy/metrics tools: `list_traffic`,`get_traffic`,`inspect_requests`,`metrics`,
+- [x] T035 [P] [US3] MCP spy/metrics tools: `list_traffic`,`get_traffic`,`inspect_requests`,`metrics`,
   `clear_traffic` (FR-021) + `metrics` aggregation use-case.
-- [ ] T036 [US3] `promote_traffic` use-case + MCP/REST (recorded interaction → persistent mock) — FR-012.
-- [ ] T037 [P] [US3] `lyrebird_guide` + `script_sandbox_api` content tools (FR-017/019).
-- [ ] T038 [US3] Explanatory-error formatter used across MCP + REST adapters (FR-020).
+- [x] T036 [US3] `promote_traffic` use-case + MCP/REST (recorded interaction → persistent mock) — FR-012.
+- [x] T037 [P] [US3] `lyrebird_guide` + `script_sandbox_api` content tools (FR-017/019).
+- [x] T038 [US3] Explanatory-error formatter used across MCP + REST adapters (FR-020).
 
 **Checkpoint**: an agent can drive 100% of management over MCP; T032 passes. Agent-first story done.
 
@@ -172,15 +172,15 @@ quickstart Scenario D.
 
 ### Tests (write first, must fail)
 
-- [ ] T039 [P] [US4] `test/features/scripting.feature`: branch on body field (FR-014); no fs/net/env
+- [x] T039 [P] [US4] `test/features/scripting.feature`: branch on body field (FR-014); no fs/net/env
   access (FR-015); infinite-loop/error → fail safe + recorded, server survives (FR-016, SC-010).
 
 ### Implementation
 
-- [ ] T040 [US4] goja VM pool in `internal/adapters/scripting` with interrupt timeout + memory guard.
-- [ ] T041 [P] [US4] Injected sandbox API (`req`, `uuid()`, `now()`, `faker`, `jsonpath()`) — nothing
+- [x] T040 [US4] goja VM pool in `internal/adapters/scripting` with interrupt timeout + memory guard.
+- [x] T041 [P] [US4] Injected sandbox API (`req`, `uuid()`, `now()`, `faker`, `jsonpath()`) — nothing
   else exposed.
-- [ ] T042 [US4] Integrate script `match`/`respond` into `MatchRequest`/response build; record script
+- [x] T042 [US4] Integrate script `match`/`respond` into `MatchRequest`/response build; record script
   failures as traffic; extend `create_mock`/`update_mock` to accept `script`.
 
 **Checkpoint**: scripted mocks work and fail safe; T039 passes.
@@ -194,13 +194,13 @@ quickstart Scenario D.
 
 ### Tests (write first, must fail)
 
-- [ ] T043 [P] [US5] `test/features/partitions.feature`: contradictory same-route mocks per space each
+- [x] T043 [P] [US5] `test/features/partitions.feature`: contradictory same-route mocks per space each
   return correctly (SC-004); no cross-space leakage; delete cascades; `default` non-deletable (FR-024).
 
 ### Implementation
 
-- [ ] T044 [US5] Enforce partition scoping in all repo queries (mocks/traffic/upstreams/scenario).
-- [ ] T045 [US5] Partition use-cases + MCP/REST: `create_space`,`list_spaces`,`delete_space` (cascade
+- [x] T044 [US5] Enforce partition scoping in all repo queries (mocks/traffic/upstreams/scenario).
+- [x] T045 [US5] Partition use-cases + MCP/REST: `create_space`,`list_spaces`,`delete_space` (cascade
   ephemeral mocks+traffic+upstreams; refuse `default`).
 
 **Checkpoint**: concurrent agents are isolated; T043 passes.
@@ -214,13 +214,13 @@ quickstart Scenario D.
 
 ### Tests (write first, must fail)
 
-- [ ] T046 [P] [US6] `test/features/lifetimes.feature`: seeded survives reset (FR-025/028); ephemeral
+- [x] T046 [P] [US6] `test/features/lifetimes.feature`: seeded survives reset (FR-025/028); ephemeral
   TTL removed (FR-026); traffic older than window purged within one GC cycle (FR-027, SC-006).
 
 ### Implementation
 
-- [ ] T047 [US6] `reset` use-case (remove ephemeral mocks; optional clear_traffic; preserve seeded).
-- [ ] T048 [US6] Enforce TTL expiry + retention purge in the GC loop (T016) with configurable window;
+- [x] T047 [US6] `reset` use-case (remove ephemeral mocks; optional clear_traffic; preserve seeded).
+- [x] T048 [US6] Enforce TTL expiry + retention purge in the GC loop (T016) with configurable window;
   metrics/log of purged counts.
 
 **Checkpoint**: storage stays bounded; seeded fixtures durable; T046 passes.
@@ -234,15 +234,15 @@ forward-proxy (MITM), and opt-in scenarios. **Independent test**: quickstart Sce
 
 ### Tests (write first, must fail)
 
-- [ ] T049 [P] [US7] `test/features/advanced_proxy.feature`: rewrite (FR-004), fault/latency (FR-005),
+- [x] T049 [P] [US7] `test/features/advanced_proxy.feature`: rewrite (FR-004), fault/latency (FR-005),
   allow/deny blocked + recorded (FR-006), scenario sequential responses.
 
 ### Implementation
 
-- [ ] T050 [P] [US7] Request rewrite + response transform (declarative + JS) in the proxy path.
-- [ ] T051 [P] [US7] Fault/latency injection actions (delay/reset/timeout/malformed).
-- [ ] T052 [P] [US7] Proxy allow/deny host policy (`LYREBIRD_ALLOW_PROXY_HOSTS`) + record outcome.
-- [ ] T053 [US7] Scenario sequential responses + `scenario_state` (reset on reset).
+- [x] T050 [P] [US7] Request rewrite + response transform (declarative + JS) in the proxy path.
+- [x] T051 [P] [US7] Fault/latency injection actions (delay/reset/timeout/malformed).
+- [x] T052 [P] [US7] Proxy allow/deny host policy (`LYREBIRD_ALLOW_PROXY_HOSTS`) + record outcome.
+- [x] T053 [US7] Scenario sequential responses + `scenario_state` (reset on reset).
 - [ ] T054 [US7] Transparent forward-proxy / MITM: on-the-fly cert signing from a Lyrebird CA;
   destination derived from CONNECT/Host; same record+decide pipeline.
 - [ ] T067 [US7] MITM CA key lifecycle (per data-model.md): generate a disposable CA at startup by

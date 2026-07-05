@@ -101,7 +101,7 @@ Every call through a partition (FR-002). Subject to retention GC (FR-027).
 | `method`, `host`, `path` | string | plaintext (filter). |
 | `request` | blob 🔒 | Full request: headers + body (truncated > cap, default 1 MB, with marker). |
 | `matched_mock_id` | string? | Which mock fired, or null for pure passthrough. |
-| `decision` | enum | `mocked` \| `proxied` \| `faulted` \| `not_configured`. |
+| `decision` | enum | `mocked` \| `proxied` \| `faulted` \| `not_configured` \| `script_failed` \| `blocked` \| `internal_error`. |
 | `response` | blob 🔒 | Full returned response; for proxied calls, the real upstream response. |
 | `status` | int | plaintext (filter/metrics). |
 | `latency_ms` | int | plaintext (metrics). |

@@ -109,27 +109,67 @@ func openAndMigrate(ctx context.Context, path string) (*sql.DB, error) {
 	return db, nil
 }
 
+// renameFile is a seam over os.Rename so tests can inject a failure at a
+// specific point in quarantine's rename sequence (e.g. to prove the rollback
+// path). Production code always runs with this set to os.Rename.
+var renameFile = os.Rename
+
 // quarantine renames path (and any WAL/SHM sidecar files) aside — never
 // deletes them, so a human can inspect them later — and returns the main
 // file's new path. If path does not exist, quarantine is a no-op.
+//
+// The rename sequence is all-or-nothing: if any rename in the sequence fails
+// (e.g. disk full partway through), every rename that already succeeded is
+// rolled back (renamed back to its original path) before the error is
+// returned, so a failed quarantine() call always leaves the filesystem in
+// the exact state it found it — never partially quarantined. If a rollback
+// rename itself also fails, that's a genuinely bad state (a file may be
+// stuck under its quarantine path instead of its original path); this is
+// surfaced clearly in the returned error rather than swallowed, since
+// quarantine() has no logger of its own — callers (e.g. Open) already log
+// the returned error.
 func quarantine(path string) (string, error) {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
 	suffix := fmt.Sprintf(".corrupt-%d", time.Now().UnixNano())
 
+	type renamedPath struct {
+		from, to string
+	}
+	var done []renamedPath
+
+	rollback := func(cause error) error {
+		var rollbackErrs []error
+		for i := len(done) - 1; i >= 0; i-- {
+			r := done[i]
+			if err := renameFile(r.to, r.from); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Errorf("restore %s from %s: %w", r.from, r.to, err))
+			}
+		}
+		if len(rollbackErrs) > 0 {
+			return fmt.Errorf("quarantine failed (%w); additionally, rollback could not restore %d of %d renamed file(s), filesystem may be left in a mixed state: %w",
+				cause, len(rollbackErrs), len(done), errors.Join(rollbackErrs...))
+		}
+		return cause
+	}
+
 	for _, sidecar := range []string{path + "-wal", path + "-shm"} {
 		if _, err := os.Stat(sidecar); err == nil {
-			if err := os.Rename(sidecar, sidecar+suffix); err != nil {
-				return "", fmt.Errorf("rename sidecar %s: %w", sidecar, err)
+			dest := sidecar + suffix
+			if err := renameFile(sidecar, dest); err != nil {
+				return "", rollback(fmt.Errorf("rename sidecar %s: %w", sidecar, err))
 			}
+			done = append(done, renamedPath{from: sidecar, to: dest})
 		}
 	}
 
 	dest := path + suffix
-	if err := os.Rename(path, dest); err != nil {
-		return "", fmt.Errorf("rename %s to %s: %w", path, dest, err)
+	if err := renameFile(path, dest); err != nil {
+		return "", rollback(fmt.Errorf("rename %s to %s: %w", path, dest, err))
 	}
+	done = append(done, renamedPath{from: path, to: dest})
+
 	return dest, nil
 }
 
@@ -139,11 +179,12 @@ func (s *Store) Close() error {
 }
 
 // InsertRawEphemeralMock is a low-level fixture helper for tests: it seals
-// actionJSON with the given sealer (which may differ from the Store's own,
-// to simulate data written under a previous at-rest key) and inserts a row
-// directly. Production code never calls this — it exists solely so BDD
-// scenarios can fabricate pre-existing on-disk state without a MockRepo,
-// which doesn't land until M1.
+// actionJSON with the given sealer and inserts a row directly, bypassing the
+// normal MockRepo write path (which would always seal with the Store's own
+// current sealer). Production code never calls this — it exists so a test
+// can fabricate a row sealed under a sealer other than the Store's active
+// one, e.g. to simulate data written under a previous at-rest key and
+// exercise the undecryptable-blob-treated-as-absent path (FR-029).
 func (s *Store) InsertRawEphemeralMock(ctx context.Context, sealer crypto.Sealer, partition, id, name string, actionJSON []byte) error {
 	sealed, err := sealer.Seal(actionJSON)
 	if err != nil {
@@ -228,9 +269,33 @@ func (s *Store) PruneTraffic(ctx context.Context, olderThan time.Time) (int, err
 // of now, returning the number removed. Seeded mocks are never stored in
 // this table, so they are never touched. expires_at is stored in
 // nanoseconds (see CreateMock) — not seconds — so this compares against
-// now.UnixNano().
+// now.UnixNano(). It also deletes any scenario_state rows belonging to the
+// mocks it prunes: without this, a mock whose Scenario action ever advances
+// past index 0 and then expires via TTL would leave its scenario_state row
+// orphaned forever, since nothing else prunes scenario_state on TTL expiry
+// (mock_crud.go's Update/Delete already call ResetScenario for the
+// use-case-driven paths; TTL-based GC was the one path that missed it). Both
+// deletes run in a single transaction — SQLite's single connection
+// (db.SetMaxOpenConns(1), set in openAndMigrate) makes this safe with zero
+// risk of lock contention with other goroutines — so the scenario_state
+// cleanup and the ephemeral_mocks deletion never observe a partial result.
 func (s *Store) PruneExpiredEphemeralMocks(ctx context.Context, now time.Time) (int, error) {
-	res, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("store: prune expired ephemeral mocks: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM scenario_state
+		WHERE ("partition", mock_id) IN (
+			SELECT "partition", id FROM ephemeral_mocks
+			WHERE expires_at IS NOT NULL AND expires_at < ?
+		)`, now.UnixNano()); err != nil {
+		return 0, fmt.Errorf("store: prune expired ephemeral mocks: delete orphaned scenario state: %w", err)
+	}
+
+	res, err := tx.ExecContext(ctx,
 		`DELETE FROM ephemeral_mocks WHERE expires_at IS NOT NULL AND expires_at < ?`, now.UnixNano())
 	if err != nil {
 		return 0, fmt.Errorf("store: prune expired ephemeral mocks: %w", err)
@@ -239,5 +304,10 @@ func (s *Store) PruneExpiredEphemeralMocks(ctx context.Context, now time.Time) (
 	if err != nil {
 		return 0, fmt.Errorf("store: prune expired ephemeral mocks rows affected: %w", err)
 	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("store: prune expired ephemeral mocks: commit tx: %w", err)
+	}
+
 	return int(n), nil
 }

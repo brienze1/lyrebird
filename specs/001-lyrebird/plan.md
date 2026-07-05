@@ -88,31 +88,41 @@ specs/001-lyrebird/
 ### Source Code (repository root)
 
 ```text
-cmd/lyrebird/                 # main: config load, wire listeners (proxy + control plane), start GC
-internal/domain/             # entities: Partition, Upstream, Mock, Match, Action, Scenario, Traffic (no deps)
-internal/usecase/            # CreateMock, MatchRequest, DecideMockOrProxy, RenderResponse,
-                             #   RecordTraffic, PromoteTraffic, ManagePartition, RunGC, LoadSeeds, IssueToken
+cmd/lyrebird/                 # thin entrypoint: parses flags/signals, delegates all real wiring to
+                              #   internal/bootstrap (Run for HTTP, RunStdio for stdio-only MCP)
+internal/bootstrap/          # app.go: buildCore wires every usecase/adapter/infra dependency once,
+                              #   shared identically by the HTTP (Run) and stdio (RunStdio) entrypoints;
+                              #   also owns Shutdown (concurrent drain of both servers + store close)
+internal/domain/              # entities: Partition, Upstream, Mock, Match, Action, Scenario, Traffic (no deps)
+internal/usecase/             # CreateMock, MatchRequest, DecideMockOrProxy, RenderResponse,
+                              #   RecordTraffic, PromoteTraffic, ManagePartition, RunGC, LoadSeeds, IssueToken
 internal/adapters/
-  ├── mcp/                   # MCP tools (Streamable HTTP + stdio) — thin over usecases
-  ├── httpadmin/             # Admin REST handlers (thin twin)
-  ├── proxy/                 # reverse-proxy engine (M1/M2) + forward-proxy/MITM (M6)
-  ├── matcher/               # declarative matching (method/path/header/query/body)
-  ├── scripting/             # goja VM pool + injected sandbox API (req, uuid, now, faker, jsonpath)
-  ├── template/              # response templating
-  └── examples/              # embedded recipe library (markdown/JSON) served over MCP — content only
+  ├── mcp/                    # MCP tools (Streamable HTTP + stdio) — thin over usecases
+  ├── httpadmin/               # Admin REST handlers (thin twin)
+  ├── dto/                    # shared wire-format DTOs + conversions, used by both httpadmin and mcp
+  ├── httpmw/                  # stdlib net/http middleware (partition/space resolution from headers)
+  ├── proxy/                   # reverse-proxy engine (M1/M2) + forward-proxy/MITM (M6, not yet built)
+  ├── matcher/                 # declarative matching (method/path/header/query/body)
+  ├── scripting/               # goja VM (per-call, never pooled) + injected sandbox API (req, uuid, now, faker, jsonpath)
+  ├── template/                # response templating
+  └── examples/                # embedded recipe library (markdown/JSON) served over MCP — content only, not yet built
 internal/infra/
-  ├── store/                 # SQLite (modernc) repositories + AES-GCM at-rest crypto
-  ├── seeds/                 # YAML config loader for seeded mocks/partitions
-  ├── crypto/                # at-rest key mgmt (startup random or LYREBIRD_DATA_KEY)
-  ├── auth/                  # JWT issue/verify (only active when LYREBIRD_AUTH_KEYS set)
-  └── gc/                    # retention sweeper (traffic + expired ephemeral mocks)
+  ├── store/                   # SQLite (modernc) repositories + AES-GCM at-rest crypto
+  ├── seeds/                   # YAML config loader for seeded mocks/partitions
+  ├── config/                  # env-var config parsing/validation (fail-fast on malformed values)
+  ├── crypto/                  # at-rest key mgmt (startup random or LYREBIRD_DATA_KEY)
+  ├── auth/                    # JWT issue/verify (only active when LYREBIRD_AUTH_KEYS set) — not yet built
+  ├── clock/                   # usecase.Clock's production impl (System{}, real time.Now())
+  ├── idgen/                   # usecase.IDGen's production impl (random v4 UUIDs via google/uuid)
+  ├── logging/                 # slog.Logger construction
+  └── gc/                      # retention sweeper (traffic + expired ephemeral mocks)
 test/
-  ├── features/              # godog .feature files (one per user story)
-  └── support/               # step defs, in-memory upstream test double
-Dockerfile                   # multi-stage, CGO_ENABLED=0 → scratch/distroless
-.github/workflows/ci.yml     # PR gate: vet + lint + test + docker build
+  ├── features/                # godog .feature files (one per user story)
+  └── support/                 # step defs, in-memory upstream test double
+Dockerfile                    # multi-stage, CGO_ENABLED=0 → scratch/distroless
+.github/workflows/ci.yml      # PR gate: vet + lint + test + docker build
 .github/workflows/release.yml# push to main / tags: multi-arch build + push to GHCR
-docker-compose.yml           # local example
+docker-compose.yml            # local example
 ```
 
 **Structure Decision**: Single Go service in clean-architecture layers. The domain has no imports

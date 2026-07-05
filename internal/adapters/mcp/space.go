@@ -47,7 +47,7 @@ func registerSpaceTools(s *sdkmcp.Server, deps Deps) {
 		Name:        "create_space",
 		Description: `Register a new space (partition) for isolating mocks/traffic/upstreams. Example: {"id":"agent-a"}`,
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in CreateSpaceIn) (*sdkmcp.CallToolResult, dto.PartitionDTO, error) {
-		p, err := deps.CreateSpace.Execute(ctx, dto.PartitionFromDTO(dto.PartitionDTO{ID: in.ID, Description: in.Description}))
+		p, err := deps.CreateSpace.Execute(ctx, dto.PartitionFromDTO(dto.NewPartitionDTOFromFields(in.ID, in.Description)))
 		if err != nil {
 			return nil, dto.PartitionDTO{}, explainErr(err)
 		}

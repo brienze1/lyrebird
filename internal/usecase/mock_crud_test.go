@@ -245,6 +245,87 @@ func TestMockCRUDCreateRejectsEmptyScenarioResponses(t *testing.T) {
 	}
 }
 
+func TestMockCRUDCreateRejectsUnknownFaultKind(t *testing.T) {
+	uc, _ := newCRUD()
+	_, err := uc.Create(context.Background(), MockInput{
+		Partition: "default", Name: "x",
+		Action: domain.Action{Kind: domain.ActionFault, Fault: &domain.FaultAction{Kind: "tiemout"}},
+	})
+	if !errors.Is(err, domain.ErrInvalidMock) {
+		t.Fatalf("Create() with an unknown fault.kind = %v, want ErrInvalidMock", err)
+	}
+}
+
+// TestMockCRUDCreateRejectsNonPositiveTTLSeconds closes a gap found during a
+// pass-7 adversarial audit of internal/adapters/httpadmin: TTLSeconds was
+// never validated by MockCRUD.validate, so a caller-supplied ttl_seconds of
+// 0 or negative sailed through Create straight into
+// store.expiresAtColumn (CreatedAt.UnixNano() + ttl*time.Second), producing
+// an ephemeral mock whose expires_at is already in the past — a 201
+// Created response for a mock that is dead on arrival and reaped almost
+// immediately, exactly the "silent, not loud" validation failure class
+// FR-026 ("optionally with a lifetime after which they are automatically
+// removed") implies must be rejected outright. Mirrors the fix already
+// applied to LYREBIRD_GC_INTERVAL/LYREBIRD_SCRIPT_TIMEOUT in
+// internal/infra/config/config.go (parsePositiveDuration).
+func TestMockCRUDCreateRejectsNonPositiveTTLSeconds(t *testing.T) {
+	for _, ttl := range []int{0, -1, -100} {
+		ttl := ttl
+		uc, _ := newCRUD()
+		_, err := uc.Create(context.Background(), MockInput{
+			Partition: "default", Name: "x", Action: respondAction(200), TTLSeconds: &ttl,
+		})
+		if !errors.Is(err, domain.ErrInvalidMock) {
+			t.Fatalf("Create() with ttl_seconds=%d = %v, want ErrInvalidMock", ttl, err)
+		}
+	}
+}
+
+// TestMockCRUDCreateAcceptsPositiveOrNilTTLSeconds confirms the fix above
+// doesn't reject the two legitimate cases: no TTL at all (persists forever
+// until reset/partition-delete) and a genuine positive TTL.
+func TestMockCRUDCreateAcceptsPositiveOrNilTTLSeconds(t *testing.T) {
+	uc, _ := newCRUD()
+	if _, err := uc.Create(context.Background(), MockInput{Partition: "default", Name: "x", Action: respondAction(200)}); err != nil {
+		t.Fatalf("Create() with nil TTLSeconds: %v", err)
+	}
+	ttl := 60
+	if _, err := uc.Create(context.Background(), MockInput{Partition: "default", Name: "y", Action: respondAction(200), TTLSeconds: &ttl}); err != nil {
+		t.Fatalf("Create() with ttl_seconds=60: %v", err)
+	}
+}
+
+func TestMockCRUDUpdateRejectsUnknownFaultKind(t *testing.T) {
+	uc, _ := newCRUD()
+	created, err := uc.Create(context.Background(), MockInput{
+		Partition: "default", Name: "x",
+		Action: domain.Action{Kind: domain.ActionFault, Fault: &domain.FaultAction{Kind: domain.FaultDelay}},
+	})
+	if err != nil {
+		t.Fatalf("Create(): %v", err)
+	}
+	_, err = uc.Update(context.Background(), "default", created.ID, MockInput{
+		Name:   "x",
+		Action: domain.Action{Kind: domain.ActionFault, Fault: &domain.FaultAction{Kind: "tiemout"}},
+	})
+	if !errors.Is(err, domain.ErrInvalidMock) {
+		t.Fatalf("Update() with an unknown fault.kind = %v, want ErrInvalidMock", err)
+	}
+}
+
+func TestMockCRUDCreateAcceptsAllValidFaultKinds(t *testing.T) {
+	for _, kind := range []domain.FaultKind{domain.FaultDelay, domain.FaultReset, domain.FaultTimeout, domain.FaultMalformed} {
+		uc, _ := newCRUD()
+		_, err := uc.Create(context.Background(), MockInput{
+			Partition: "default", Name: "x",
+			Action: domain.Action{Kind: domain.ActionFault, Fault: &domain.FaultAction{Kind: kind}},
+		})
+		if err != nil {
+			t.Errorf("Create() with fault.kind %q: %v, want no error", kind, err)
+		}
+	}
+}
+
 func TestMockCRUDCreateDefaultsEmptyOnExhaustToRepeatLast(t *testing.T) {
 	uc, _ := newCRUD()
 	m, err := uc.Create(context.Background(), MockInput{

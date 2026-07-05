@@ -22,8 +22,13 @@ type Engine struct{}
 func New() *Engine { return &Engine{} }
 
 // placeholderRe recognizes {{request.method}}, {{request.header.X}},
-// {{request.query.q}}, and {{request.body.<gjson-path>}}.
-var placeholderRe = regexp.MustCompile(`\{\{\s*request\.(method|header\.[^.}\s]+|query\.[^.}\s]+|body\.[^}\s]+)\s*\}\}`)
+// {{request.query.q}}, and {{request.body.<gjson-path>}}. Header/query names
+// are looked up as a single literal map key (see resolve), not traversed as
+// a path, but the character class must still allow '.' since real-world
+// header/query names legitimately contain dots (e.g. request.query.filter.status);
+// otherwise such placeholders fail to match at all and their literal
+// "{{...}}" text leaks into the rendered output.
+var placeholderRe = regexp.MustCompile(`\{\{\s*request\.(method|header\.[^}\s]+|query\.[^}\s]+|body\.[^}\s]+)\s*\}\}`)
 
 // Render substitutes every recognized placeholder in body against in. An
 // unresolved placeholder (unknown field, missing header/query, absent body

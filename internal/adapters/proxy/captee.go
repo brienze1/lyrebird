@@ -50,10 +50,5 @@ func (c *cappedCapture) Result() (body []byte, truncated bool, totalSize int64) 
 // unmodified and unbounded.
 func newCappedTee(src io.ReadCloser, capBytes int64) (io.ReadCloser, *cappedCapture) {
 	c := newCappedCapture(capBytes)
-	return teeReadCloser{Reader: io.TeeReader(src, c), Closer: src}, c
-}
-
-type teeReadCloser struct {
-	io.Reader
-	io.Closer
+	return readCloser{Reader: io.TeeReader(src, c), Closer: src}, c
 }

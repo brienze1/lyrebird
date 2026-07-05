@@ -30,11 +30,14 @@ type RespondAction struct {
 	LatencyMS *int
 }
 
-// ProxyAction forwards to the resolved Upstream. The rewrite/transform
-// scripts are intended to hold JS source executed by goja, but remain
-// unimplemented — out of scope for M4 (which only wires up Mock.Script's
-// match_src/respond_src, not these proxy-action-level fields); only the
-// field needs to exist and round-trip for now.
+// ProxyAction forwards to the resolved Upstream. RewriteRequestScript and
+// TransformResponseScript hold JS source executed by goja at proxy-forward
+// time (internal/adapters/proxy/engine.go), letting the mock rewrite the
+// outgoing request and the real upstream response respectively. Unlike
+// Mock.Script's match/respond scripts, which fail closed, a failure in
+// either of these two scripts fails open: the engine logs a warning and
+// forwards/returns the request/response unmodified rather than erroring out
+// an otherwise-working proxy call.
 type ProxyAction struct {
 	RewriteRequestScript    *string
 	TransformResponseScript *string

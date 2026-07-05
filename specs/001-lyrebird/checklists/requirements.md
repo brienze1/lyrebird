@@ -32,7 +32,9 @@
 ## Notes
 
 - Items marked incomplete require spec updates before `/speckit-plan`.
-- Four `[NEEDS CLARIFICATION]` markers remain (upstream-error passthrough behavior, large/streaming
-  body limits, priority tie-break rule, partition-deletion semantics) plus one measurability gap
-  (SC-009 latency/concurrency target). These are the inputs to `/speckit-clarify`; once resolved and
-  integrated, re-validate the three unchecked items.
+- **Resolved** (was: four `[NEEDS CLARIFICATION]` markers — upstream-error passthrough behavior,
+  large/streaming body limits, priority tie-break rule, partition-deletion semantics — plus one
+  measurability gap, SC-009 latency/concurrency target). All five were answered in the
+  `/speckit-clarify` session recorded under [spec.md](../spec.md)'s "Clarifications" section
+  (2026-07-03) and are reflected in the checked items above; this checklist is fully satisfied and
+  `/speckit-plan` was unblocked.

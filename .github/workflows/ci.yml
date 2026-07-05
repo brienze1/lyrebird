@@ -38,9 +38,18 @@ jobs:
       - name: go test (incl. BDD)
         run: go test ./... -race -covermode=atomic
 
+      # docker-container driver is required for the type=gha cache backend
+      # below (the default docker driver silently can't use it); mirrors
+      # release.yml's own builder setup so this PR gate build isn't a full,
+      # uncached rebuild on every single push while release.yml (which runs
+      # far less often) gets layer caching.
+      - uses: docker/setup-buildx-action@v4
+
       - name: docker build (no push)
         uses: docker/build-push-action@v7
         with:
           context: .
           push: false
           tags: lyrebird:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

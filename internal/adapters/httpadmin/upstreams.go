@@ -39,7 +39,9 @@ func ListUpstreams(uc listUpstreamsUseCase) http.HandlerFunc {
 func SetUpstream(uc setUpstreamUseCase) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var d dto.UpstreamDTO
-		if err := json.NewDecoder(r.Body).Decode(&d); err != nil {
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&d); err != nil {
 			writeJSONError(w, http.StatusBadRequest, err)
 			return
 		}

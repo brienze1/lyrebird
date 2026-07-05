@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ type fakeTrafficRepo struct {
 	getErr     error
 	listResult []domain.TrafficRecord
 	listFilter TrafficFilter // captures the last filter passed to ListTraffic
+	listCalled bool          // true once ListTraffic has been invoked
 
 	cleared         []string // partitions ClearTraffic was called with
 	clearTrafficErr error
@@ -39,6 +41,7 @@ func (f *fakeTrafficRepo) GetTraffic(_ context.Context, _, _ string) (domain.Tra
 	return f.getResult, nil
 }
 func (f *fakeTrafficRepo) ListTraffic(_ context.Context, _ string, filter TrafficFilter) ([]domain.TrafficRecord, error) {
+	f.listCalled = true
 	f.listFilter = filter
 	return f.listResult, nil
 }
@@ -110,7 +113,7 @@ func TestRecordTrafficPropagatesRepoError(t *testing.T) {
 	uc := NewRecordTraffic(repo, fixedClock{time.Now()}, &sequentialIDs{})
 
 	_, err := uc.Execute(context.Background(), RecordTrafficInput{Partition: "default"})
-	if err == nil {
-		t.Fatal("Execute() with a failing repo, want error")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("Execute() with a failing repo = %v, want ErrNotFound", err)
 	}
 }
