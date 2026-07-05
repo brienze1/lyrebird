@@ -127,7 +127,7 @@ func newTestHandler(rec *fakeTrafficRecorder, scenario scenarioAdvancer) *Handle
 	return NewHandler(
 		context.Background(),
 		fakeUpstreamLister{}, rec, nil, noopTemplaterProxy{}, noopScriptEvaluator{}, scenario,
-		NewEngine(time.Second, nil, nil), 1<<20, systemClockProxy{}, nil, nil,
+		NewEngine(time.Second, nil, nil), 1<<20, systemClockProxy{}, nil, nil, nil,
 	)
 }
 
@@ -166,7 +166,7 @@ func TestServeMockedFallsThroughWhenScenarioExhaustedConcurrently(t *testing.T) 
 
 	reqBody, reqCapture := newCappedTee(req.Body, 1<<20)
 	in := usecase.MatchInput{Method: req.Method, Path: req.URL.Path}
-	h.serveMocked(w, req, "default", time.Now(), map[string][]string{}, reqBody, reqCapture, mock, in)
+	h.serveMocked(w, req, "default", time.Now(), map[string][]string{}, reqBody, reqCapture, mock, in, nil)
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (not_configured) — a stale scenario response must never be served once exhausted", w.Code)
@@ -203,7 +203,7 @@ func TestServeMockedServesScenarioResponseWhenNotExhausted(t *testing.T) {
 
 	reqBody, reqCapture := newCappedTee(req.Body, 1<<20)
 	in := usecase.MatchInput{Method: req.Method, Path: req.URL.Path}
-	h.serveMocked(w, req, "default", time.Now(), map[string][]string{}, reqBody, reqCapture, mock, in)
+	h.serveMocked(w, req, "default", time.Now(), map[string][]string{}, reqBody, reqCapture, mock, in, nil)
 
 	if w.Code != http.StatusOK || w.Body.String() != "one" {
 		t.Fatalf("status/body = %d/%q, want 200/%q", w.Code, w.Body.String(), "one")
@@ -239,7 +239,7 @@ func TestServeMockedCallsAdvanceEphemeralScenarioForEphemeralMocks(t *testing.T)
 
 	reqBody, reqCapture := newCappedTee(req.Body, 1<<20)
 	in := usecase.MatchInput{Method: req.Method, Path: req.URL.Path}
-	h.serveMocked(w, req, "default", time.Now(), map[string][]string{}, reqBody, reqCapture, mock, in)
+	h.serveMocked(w, req, "default", time.Now(), map[string][]string{}, reqBody, reqCapture, mock, in, nil)
 
 	if advanceEphemeralCalls != 1 {
 		t.Errorf("AdvanceEphemeralScenario calls = %d, want 1", advanceEphemeralCalls)
@@ -278,7 +278,7 @@ func TestServeMockedCallsAdvanceScenarioForSeededMocks(t *testing.T) {
 
 	reqBody, reqCapture := newCappedTee(req.Body, 1<<20)
 	in := usecase.MatchInput{Method: req.Method, Path: req.URL.Path}
-	h.serveMocked(w, req, "default", time.Now(), map[string][]string{}, reqBody, reqCapture, mock, in)
+	h.serveMocked(w, req, "default", time.Now(), map[string][]string{}, reqBody, reqCapture, mock, in, nil)
 
 	if advanceCalls != 1 {
 		t.Errorf("AdvanceScenario calls = %d, want 1", advanceCalls)
@@ -300,7 +300,7 @@ func TestServeHTTPRecordsInternalErrorWhenBodyPeekFails(t *testing.T) {
 	h := NewHandler(
 		context.Background(),
 		fakeUpstreamLister{}, rec, fakeMockMatcher{}, noopTemplaterProxy{}, noopScriptEvaluator{}, fakeScenarioAdvancer{},
-		NewEngine(time.Second, nil, nil), 1<<20, systemClockProxy{}, nil, nil,
+		NewEngine(time.Second, nil, nil), 1<<20, systemClockProxy{}, nil, nil, nil,
 	)
 
 	readErr := errors.New("boom: connection reset")
@@ -350,7 +350,7 @@ func TestServeHTTPRecordsInternalErrorWhenMatchFails(t *testing.T) {
 	h := NewHandler(
 		context.Background(),
 		fakeUpstreamLister{}, rec, fakeMockMatcher{err: matchErr}, noopTemplaterProxy{}, noopScriptEvaluator{}, fakeScenarioAdvancer{},
-		NewEngine(time.Second, nil, nil), 1<<20, systemClockProxy{}, nil, nil,
+		NewEngine(time.Second, nil, nil), 1<<20, systemClockProxy{}, nil, nil, nil,
 	)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.local/x", nil)
@@ -397,7 +397,7 @@ func TestServeProxiedRecordsInternalErrorWhenUpstreamLookupFails(t *testing.T) {
 	h := NewHandler(
 		context.Background(),
 		fakeUpstreamLister{err: lookupErr}, rec, fakeMockMatcher{}, noopTemplaterProxy{}, noopScriptEvaluator{}, fakeScenarioAdvancer{},
-		NewEngine(time.Second, nil, nil), 1<<20, systemClockProxy{}, nil, nil,
+		NewEngine(time.Second, nil, nil), 1<<20, systemClockProxy{}, nil, nil, nil,
 	)
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.local/x", nil)
@@ -408,7 +408,7 @@ func TestServeProxiedRecordsInternalErrorWhenUpstreamLookupFails(t *testing.T) {
 	in := usecase.MatchInput{Method: req.Method, Path: req.URL.Path}
 	mockID := "proxy-mock-1"
 
-	h.serveProxied(w, req, "default", time.Now(), map[string][]string{}, reqBody, reqCapture, in, &domain.ProxyAction{}, &mockID)
+	h.serveProxied(w, req, "default", time.Now(), map[string][]string{}, reqBody, reqCapture, in, &domain.ProxyAction{}, &mockID, nil)
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", w.Code)
@@ -448,7 +448,7 @@ func TestServeMockedRecordsInternalErrorWhenScenarioAdvanceFails(t *testing.T) {
 	h := NewHandler(
 		context.Background(),
 		fakeUpstreamLister{}, rec, fakeMockMatcher{}, noopTemplaterProxy{}, noopScriptEvaluator{}, fakeScenarioAdvancer{err: advanceErr},
-		NewEngine(time.Second, nil, nil), 1<<20, systemClockProxy{}, nil, nil,
+		NewEngine(time.Second, nil, nil), 1<<20, systemClockProxy{}, nil, nil, nil,
 	)
 
 	mock := domain.Mock{
@@ -466,7 +466,7 @@ func TestServeMockedRecordsInternalErrorWhenScenarioAdvanceFails(t *testing.T) {
 	reqBody, reqCapture := newCappedTee(req.Body, 1<<20)
 	in := usecase.MatchInput{Method: req.Method, Path: req.URL.Path}
 
-	h.serveMocked(w, req, "default", time.Now(), map[string][]string{}, reqBody, reqCapture, mock, in)
+	h.serveMocked(w, req, "default", time.Now(), map[string][]string{}, reqBody, reqCapture, mock, in, nil)
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", w.Code)

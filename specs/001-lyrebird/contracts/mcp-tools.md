@@ -54,6 +54,14 @@ token (FR-031); the data plane is unaffected.
 | `list_spaces` | — | Partitions. | FR-023 |
 | `delete_space` | `{ id }` | Cascade result; refuses `default`. | FR-024 |
 
+## MITM (forward-proxy mode)
+
+Only registered when `LYREBIRD_MITM_ENABLED=true` (T054/T067) — otherwise this tool does not exist.
+
+| Tool | Input | Output | Requirement |
+|------|-------|--------|-------------|
+| `get_mitm_ca_cert` | `{}` | CA certificate, PEM-encoded (`pem` field + raw text content). Never the private key. | FR-033 |
+
 ## Error contract
 
 Errors state **what** failed and **how to fix** it, e.g.:

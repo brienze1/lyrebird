@@ -58,7 +58,7 @@ func TestRequestBodyCapExactBoundary(t *testing.T) {
 				context.Background(),
 				fakeUpstreamLister{upstreams: []domain.Upstream{{MatchHost: "example.local", TargetURL: srv.URL}}},
 				rec, fakeMockMatcher{}, noopTemplaterProxy{}, noopScriptEvaluator{}, fakeScenarioAdvancer{},
-				NewEngine(time.Second, nil, nil), capBytes, systemClockProxy{}, nil, nil,
+				NewEngine(time.Second, nil, nil), capBytes, systemClockProxy{}, nil, nil, nil,
 			)
 
 			payload := bytes.Repeat([]byte("x"), int(tc.size))

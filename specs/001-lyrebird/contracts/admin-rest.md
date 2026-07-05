@@ -30,6 +30,7 @@ the token endpoint and health require `Authorization: Bearer` (FR-031).
 | `POST /__lyrebird/traffic/{id}/promote` | `{ name?, ttl_seconds? }` | promote_traffic | FR-012 |
 | `GET/POST /__lyrebird/upstreams` | Upstream | list/set_upstream | FR-003 |
 | `GET/POST/DELETE /__lyrebird/spaces[/{id}]` | Partition | space tools | FR-023/24 |
+| `GET /__lyrebird/mitm/ca-cert` | — (raw `application/x-pem-file` body, not JSON) | get_mitm_ca_cert; only registered when `LYREBIRD_MITM_ENABLED=true` (T054/T067) | FR-033 |
 | `GET /__lyrebird/examples[/{id}]` **(PLANNED, NOT YET IMPLEMENTED)** | — | list/get_example | FR-022 |
 | `POST /__lyrebird/import` / `GET /__lyrebird/export` **(PLANNED, NOT YET IMPLEMENTED)** | YAML bundle | seed round-trip | FR-034 |
 | `POST /__lyrebird/auth/token` **(PLANNED, NOT YET IMPLEMENTED)** | `{ client_key }` | issue JWT (auth-enabled only) | FR-031 |

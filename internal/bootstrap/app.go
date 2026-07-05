@@ -30,6 +30,7 @@ import (
 	"github.com/brienze1/lyrebird/internal/infra/crypto"
 	"github.com/brienze1/lyrebird/internal/infra/gc"
 	"github.com/brienze1/lyrebird/internal/infra/idgen"
+	"github.com/brienze1/lyrebird/internal/infra/mitmca"
 	"github.com/brienze1/lyrebird/internal/infra/seeds"
 	"github.com/brienze1/lyrebird/internal/infra/store"
 	"github.com/brienze1/lyrebird/internal/usecase"
@@ -88,6 +89,13 @@ type core struct {
 	deleteSpaceUC    *usecase.DeleteSpace
 	templater        usecase.Templater
 	scriptEngine     *scripting.Engine
+
+	// mitmCA and getMITMCACertUC are nil unless cfg.MITMEnabled — see
+	// buildCore's construction below and constitution Principle V (a
+	// security-adjacent feature's surface only appears once explicitly
+	// turned on).
+	mitmCA          *mitmca.CA
+	getMITMCACertUC *usecase.GetMITMCACert
 
 	mcpServer *sdkmcp.Server
 }
@@ -158,6 +166,21 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 		return nil, fmt.Errorf("bootstrap: register default space: %w", err)
 	}
 
+	var mitmCA *mitmca.CA
+	var getMITMCACertUC *usecase.GetMITMCACert
+	if cfg.MITMEnabled {
+		if cfg.MITMCACertFile != "" {
+			mitmCA, err = mitmca.LoadFromFiles(cfg.MITMCACertFile, cfg.MITMCAKeyFile, sealer)
+		} else {
+			mitmCA, err = mitmca.Generate(sealer)
+		}
+		if err != nil {
+			_ = st.Close()
+			return nil, fmt.Errorf("bootstrap: mitm ca: %w", err)
+		}
+		getMITMCACertUC = usecase.NewGetMITMCACert(mitmCA)
+	}
+
 	mcpServer := mcp.New(mcp.Deps{
 		DefaultSpace:   cfg.DefaultSpace,
 		MockCRUD:       mockCRUDUC,
@@ -173,6 +196,7 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 		CreateSpace:    createSpaceUC,
 		ListSpaces:     listSpacesUC,
 		DeleteSpace:    deleteSpaceUC,
+		GetMITMCACert:  getMITMCACertUC,
 	})
 
 	return &core{
@@ -182,7 +206,9 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 		clearTrafficUC: clearTrafficUC, matchRequestUC: matchRequestUC, matchTestUC: matchTestUC,
 		mockCRUDUC: mockCRUDUC, resetUC: resetUC, metricsUC: metricsUC, promoteTrafficUC: promoteTrafficUC,
 		createSpaceUC: createSpaceUC, listSpacesUC: listSpacesUC, deleteSpaceUC: deleteSpaceUC,
-		templater: templater, scriptEngine: scriptEngine, mcpServer: mcpServer,
+		templater: templater, scriptEngine: scriptEngine,
+		mitmCA: mitmCA, getMITMCACertUC: getMITMCACertUC,
+		mcpServer: mcpServer,
 	}, nil
 }
 
@@ -217,6 +243,9 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	controlMux.HandleFunc("GET /__lyrebird/spaces", httpadmin.ListSpaces(c.listSpacesUC))
 	controlMux.HandleFunc("POST /__lyrebird/spaces", httpadmin.CreateSpace(c.createSpaceUC))
 	controlMux.HandleFunc("DELETE /__lyrebird/spaces/{id}", httpadmin.DeleteSpace(c.deleteSpaceUC))
+	if c.getMITMCACertUC != nil {
+		controlMux.HandleFunc("GET /__lyrebird/mitm/ca-cert", httpadmin.GetMITMCACert(c.getMITMCACertUC))
+	}
 	controlMux.Handle("/mcp", mcp.Handler(c.mcpServer))
 
 	// serverCtx (not the raw ctx Run was called with) is what a FaultTimeout
@@ -227,14 +256,26 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	serverCtx, cancelServerCtx := context.WithCancel(ctx)
 
 	proxyEngine := proxy.NewEngine(cfg.UpstreamTimeout, c.scriptEngine, log)
-	dataHandler := proxy.NewHandler(
-		serverCtx,
-		c.listUpstreamsUC, c.recordTrafficUC, c.matchRequestUC, c.templater, c.scriptEngine, c.store,
-		proxyEngine, cfg.BodyCapBytes, clock.System{}, log, cfg.AllowProxyHosts,
-	)
-	dataMux := http.NewServeMux()
-	dataMux.Handle("/", dataHandler)
-
+	// c.mitmCA is only ever passed through when non-nil: a nil *mitmca.CA
+	// boxed directly into NewHandler's mitmCA interface parameter would
+	// produce a non-nil interface wrapping a nil pointer (Go's classic
+	// typed-nil-interface footgun), silently defeating serveConnect's
+	// `h.mitmCA == nil` disabled-check and panicking on the first CONNECT
+	// instead of returning 501.
+	var dataHandler *proxy.Handler
+	if c.mitmCA != nil {
+		dataHandler = proxy.NewHandler(
+			serverCtx,
+			c.listUpstreamsUC, c.recordTrafficUC, c.matchRequestUC, c.templater, c.scriptEngine, c.store,
+			proxyEngine, cfg.BodyCapBytes, clock.System{}, log, cfg.AllowProxyHosts, c.mitmCA,
+		)
+	} else {
+		dataHandler = proxy.NewHandler(
+			serverCtx,
+			c.listUpstreamsUC, c.recordTrafficUC, c.matchRequestUC, c.templater, c.scriptEngine, c.store,
+			proxyEngine, cfg.BodyCapBytes, clock.System{}, log, cfg.AllowProxyHosts, nil,
+		)
+	}
 	var lc net.ListenConfig
 	dataLn, err := lc.Listen(ctx, "tcp", cfg.DataPlaneAddr)
 	if err != nil {
@@ -252,7 +293,12 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 		return nil, fmt.Errorf("bootstrap: listen control plane: %w", err)
 	}
 
-	dataSrv := &http.Server{Handler: partitionMW(dataMux)}
+	// The data plane is served by dataHandler directly, not via an
+	// http.ServeMux: ServeMux's pattern matching requires the request
+	// path to start with "/", but a CONNECT request's authority-form
+	// target ("host:port") parses to an empty r.URL.Path — a mux route
+	// would 404 it before ServeHTTP (and therefore serveConnect) ever ran.
+	dataSrv := &http.Server{Handler: partitionMW(dataHandler)}
 	controlSrv := &http.Server{Handler: partitionMW(controlMux)}
 
 	go func() {

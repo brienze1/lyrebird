@@ -91,6 +91,15 @@ type Deps struct {
 	CreateSpace    createSpacePort
 	ListSpaces     listSpacesPort
 	DeleteSpace    deleteSpacePort
+
+	// GetMITMCACert is Deps' one deliberately-optional field: nil unless
+	// MITM is enabled (constitution Principle V), unlike every other field
+	// above which is a required, always-non-nil port. Kept as the concrete
+	// *usecase.GetMITMCACert (not a Port interface, unlike every field
+	// above) so a nil use case stays a plain nil here rather than getting
+	// boxed into a non-nil interface — the same typed-nil-interface footgun
+	// bootstrap.Run's mitmCA wiring guards against for proxy.NewHandler.
+	GetMITMCACert *usecase.GetMITMCACert
 }
 
 // New builds one fully-registered MCP server — every tool in
@@ -106,5 +115,6 @@ func New(deps Deps) *sdkmcp.Server {
 	registerTrafficTools(s, deps)
 	registerSpaceTools(s, deps)
 	registerContentTools(s)
+	registerMITMTools(s, deps)
 	return s
 }
