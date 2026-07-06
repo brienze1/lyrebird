@@ -1,0 +1,7 @@
+{
+  "id": "endpoint-injection-howto",
+  "title": "Pointing an SDK at Lyrebird: endpoint-override cheat sheet",
+  "provider": "generic",
+  "service": "endpoint-injection",
+  "description": "Most cloud/third-party SDKs support overriding the base endpoint they call, which is how you point them at Lyrebird instead of the real service. AWS SDKs (v2, all languages): set AWS_ENDPOINT_URL (or a per-service AWS_ENDPOINT_URL_<SERVICE> variant), or pass a BaseEndpoint/EndpointResolver option in code; for S3 also enable path-style addressing so the bucket stays in the URL path. GCP client libraries: pass an explicit endpoint option at client construction (e.g. Go's option.WithEndpoint(...), Python's client_options={'api_endpoint': ...}), and disable TLS/transport-security verification since Lyrebird serves plain HTTP by default. Generic REST/HTTP clients: just point the client's configured base URL at Lyrebird's data-plane address and set the Host header to whatever the real API's hostname would be, so Lyrebird's per-partition/upstream routing (or MITM mode for clients that hardcode a full URL and can't be redirected at all) still sees the traffic correctly. This entry has no ready-to-adapt mock payload of its own — see the other recipes for concrete match/response examples per provider."
+}

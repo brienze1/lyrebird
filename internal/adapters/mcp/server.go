@@ -116,5 +116,6 @@ func New(deps Deps) *sdkmcp.Server {
 	registerSpaceTools(s, deps)
 	registerContentTools(s)
 	registerMITMTools(s, deps)
+	registerExampleTools(s)
 	return s
 }

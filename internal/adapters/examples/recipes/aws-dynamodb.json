@@ -1,0 +1,22 @@
+{
+  "id": "aws-dynamodb",
+  "title": "AWS DynamoDB GetItem (JSON 1.0 protocol, X-Amz-Target routing)",
+  "provider": "aws",
+  "service": "dynamodb",
+  "description": "DynamoDB uses the AWS JSON 1.0 protocol: every operation POSTs to \"/\" with the action named in the X-Amz-Target header (e.g. DynamoDB_20120810.GetItem), not in the URL path — so recipes for JSON-protocol services match on that header instead of the path. Point the SDK at Lyrebird via AWS_ENDPOINT_URL.",
+  "mock": {
+    "name": "aws-dynamodb-get-item",
+    "match": {
+      "method": "POST",
+      "path": "/",
+      "headers": { "X-Amz-Target": { "equals": "DynamoDB_20120810.GetItem" } }
+    },
+    "action": {
+      "respond": {
+        "status": 200,
+        "headers": { "Content-Type": "application/x-amz-json-1.0" },
+        "body": "{\"Item\":{\"id\":{\"S\":\"example-id\"},\"name\":{\"S\":\"example-name\"}}}"
+      }
+    }
+  }
+}

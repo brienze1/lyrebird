@@ -1,0 +1,18 @@
+{
+  "id": "aws-sqs",
+  "title": "AWS SQS SendMessage (query-encoded request, XML response)",
+  "provider": "aws",
+  "service": "sqs",
+  "description": "SQS's SendMessage action also uses the AWS \"query\" protocol: a form-urlencoded POST to the service root. Point the SDK at Lyrebird via AWS_ENDPOINT_URL. This recipe matches ANY POST to \"/\", so install only one query-protocol recipe (SNS or SQS) at a time unless you add a distinguishing header/priority.",
+  "mock": {
+    "name": "aws-sqs-send-message",
+    "match": { "method": "POST", "path": "/" },
+    "action": {
+      "respond": {
+        "status": 200,
+        "headers": { "Content-Type": "text/xml" },
+        "body": "<SendMessageResponse xmlns=\"http://queue.amazonaws.com/doc/2012-11-05/\"><SendMessageResult><MessageId>5fea7756-0ea4-451a-a703-a558b933e274</MessageId><MD5OfMessageBody>d41d8cd98f00b204e9800998ecf8427e</MD5OfMessageBody></SendMessageResult><ResponseMetadata><RequestId>27daac76-34dd-47df-bd01-1f6e873584a0</RequestId></ResponseMetadata></SendMessageResponse>"
+      }
+    }
+  }
+}

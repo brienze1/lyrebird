@@ -1,0 +1,18 @@
+{
+  "id": "aws-sns",
+  "title": "AWS SNS Publish (query-encoded request, XML response)",
+  "provider": "aws",
+  "service": "sns",
+  "description": "SNS's Publish action uses the AWS \"query\" protocol: the SDK POSTs a form-urlencoded body (Action=Publish&TopicArn=...&Message=...) to the service root. Point the SDK at Lyrebird via AWS_ENDPOINT_URL (or aws.Config.BaseEndpoint), and it will sign the request with dummy credentials — Lyrebird never verifies the SigV4 signature. This recipe matches ANY POST to \"/\", so install only one query-protocol recipe (SNS or SQS) at a time unless you add a distinguishing header/priority.",
+  "mock": {
+    "name": "aws-sns-publish",
+    "match": { "method": "POST", "path": "/" },
+    "action": {
+      "respond": {
+        "status": 200,
+        "headers": { "Content-Type": "text/xml" },
+        "body": "<PublishResponse xmlns=\"http://sns.amazonaws.com/doc/2010-03-31/\"><PublishResult><MessageId>567910cd-659e-55d4-8ccb-5aaf14679dc0</MessageId></PublishResult><ResponseMetadata><RequestId>384ac68d-3775-11df-8963-01868b7c937a</RequestId></ResponseMetadata></PublishResponse>"
+      }
+    }
+  }
+}
