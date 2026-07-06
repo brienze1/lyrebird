@@ -26,36 +26,10 @@ func (s slowSealer) Open(ct []byte) ([]byte, error) {
 	return s.inner.Open(ct)
 }
 
-// TestListMocksHoldsConnectionExclusively is the deterministic (not
-// stress/timing-noise-dependent) proof for this investigation's central
-// architectural question: since store.go's openAndMigrate calls
-// db.SetMaxOpenConns(1), there is exactly one physical *sql.DB connection for
-// the whole Store. database/sql's documented contract is that a
-// Query/QueryContext's returned *sql.Rows holds its connection checked out,
-// exclusively, from the call until rows.Close() (explicit or automatic on
-// exhaustion) — meaning a concurrent ExecContext/BeginTx (GC's
-// PruneExpiredEphemeralMocks/PruneTraffic) has no free connection to run on
-// and must block until the in-flight ListMocks call releases it.
-//
-// This is verified directly against the real Store.ListMocks and
-// Store.PruneExpiredEphemeralMocks — not a toy database/sql example — using
-// a slowSealer to make one ListMocks call's row iteration take long enough
-// (n rows * a real, deliberate per-row sleep) that firing a concurrent GC
-// call partway through is unambiguous, then asserting the GC call's
-// completion timestamp is never before the ListMocks call's own completion
-// timestamp — i.e. GC never actually finishes its work while ListMocks is
-// still iterating.
-//
-// A companion stress test, TestConcurrentReadsAgainstGCPruneStress, tried a
-// similar wall-clock "interval containment" check under heavy multi-goroutine
-// contention and found it produces false positives (a goroutine's recorded
-// start timestamp can precede the moment the Go scheduler actually lets it
-// dial the DB, letting another operation's genuinely fast, correctly
-// serialized work complete inside that scheduling gap) — see that test's own
-// comment. THIS test is the trustworthy one for the exclusivity question,
-// since with only two goroutines and no other contention, that scheduling-gap
-// effect isn't in play.
-func TestListMocksHoldsConnectionExclusively(t *testing.T) {
+// TestListMocksNoLongerBlocksConcurrentGC proves a long-running ListMocks
+// call no longer blocks a concurrent GC call's completion (SC-009's
+// read/write connection-pool split).
+func TestListMocksNoLongerBlocksConcurrentGC(t *testing.T) {
 	const runs = 5
 	for run := 0; run < runs; run++ {
 		dir := t.TempDir()
@@ -119,10 +93,10 @@ func TestListMocksHoldsConnectionExclusively(t *testing.T) {
 			run, lo.start.Format("15:04:05.000000000"), lo.end.Format("15:04:05.000000000"), lo.end.Sub(lo.start),
 			gc.start.Format("15:04:05.000000000"), gc.end.Format("15:04:05.000000000"), gc.end.Sub(gc.start))
 
-		if gc.end.Before(lo.end) {
-			t.Fatalf("run %d: GC's PruneExpiredEphemeralMocks completed at %s, BEFORE ListMocks finished at %s — "+
-				"this would be a deterministic, non-stress proof that GC's Exec ran concurrently with an in-flight "+
-				"ListMocks iteration on the single shared connection, contradicting the exclusive-checkout hypothesis",
+		if !gc.end.Before(lo.end) {
+			t.Fatalf("run %d: GC's PruneExpiredEphemeralMocks completed at %s, NOT before ListMocks finished at %s — "+
+				"expected GC (on the writer connection) to finish while the slow ListMocks call (on the separate reader "+
+				"pool) is still iterating, proving the two are no longer serialized through one shared connection",
 				run, gc.end.Format("15:04:05.000000000"), lo.end.Format("15:04:05.000000000"))
 		}
 	}

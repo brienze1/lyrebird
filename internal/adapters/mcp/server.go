@@ -70,6 +70,14 @@ type deleteSpacePort interface {
 	Execute(ctx context.Context, id string) error
 }
 
+type exportSeedsPort interface {
+	Execute(ctx context.Context, partition string) (usecase.ExportBundle, error)
+}
+
+type importSeedsPort interface {
+	Execute(ctx context.Context, partition string, upstreams []domain.Upstream, mocks []usecase.MockInput) (usecase.ImportResult, error)
+}
+
 // Deps is every use-case (interface-shaped, matching httpadmin's own
 // constructor-injection convention) a tool handler needs, collected into
 // one struct because mcp.AddTool registers eagerly against one *Server at
@@ -91,6 +99,8 @@ type Deps struct {
 	CreateSpace    createSpacePort
 	ListSpaces     listSpacesPort
 	DeleteSpace    deleteSpacePort
+	ExportSeeds    exportSeedsPort
+	ImportSeeds    importSeedsPort
 
 	// GetMITMCACert is Deps' one deliberately-optional field: nil unless
 	// MITM is enabled (constitution Principle V), unlike every other field
@@ -117,5 +127,6 @@ func New(deps Deps) *sdkmcp.Server {
 	registerContentTools(s)
 	registerMITMTools(s, deps)
 	registerExampleTools(s)
+	registerImportExportTools(s, deps)
 	return s
 }
