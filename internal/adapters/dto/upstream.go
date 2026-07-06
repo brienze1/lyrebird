@@ -4,9 +4,9 @@ import "github.com/brienze1/lyrebird/internal/domain"
 
 // UpstreamDTO is the wire shape of domain.Upstream.
 type UpstreamDTO struct {
-	MatchHost     string `json:"match_host"`
-	TargetURL     string `json:"target_url"`
-	TLSSkipVerify bool   `json:"tls_skip_verify"`
+	MatchHost     string `json:"match_host" yaml:"match_host"`
+	TargetURL     string `json:"target_url" yaml:"target_url"`
+	TLSSkipVerify bool   `json:"tls_skip_verify" yaml:"tls_skip_verify"`
 }
 
 // UpstreamToDTO converts a domain.Upstream to its wire equivalent.

@@ -1,11 +1,5 @@
 // Package dto holds the wire-shape DTOs and domain<->DTO conversions shared
-// by every adapter that exposes Lyrebird's management API — Admin REST
-// (internal/adapters/httpadmin) and MCP (internal/adapters/mcp). Defining
-// these once here, rather than in httpadmin with mcp importing it (or vice
-// versa), keeps both adapters as peers over the same use-case layer per
-// constitution Principle II: MCP and REST must not duplicate business
-// logic, and the nontrivial matcher/action conversion logic here counts as
-// exactly that.
+// by Lyrebird's management API adapters.
 package dto
 
 import (
@@ -15,74 +9,67 @@ import (
 	"github.com/brienze1/lyrebird/internal/usecase"
 )
 
-// Note: MatcherDTO, BodyMatcherDTO, MatchDTO, and ActionDTO (below) mirror
-// contracts/seed-config.md's schema exactly (flattened Matcher fields, no
-// separate "matcher" wrapper key; ActionKind inferred from which of
-// respond/proxy/fault is present, not a separate "kind" field) — the same
-// shape used by internal/infra/seeds, since import/export round-trips
-// through this schema too.
-
 // MatcherDTO is the wire shape of domain.Matcher.
 type MatcherDTO struct {
-	Equals   *string `json:"equals,omitempty"`
-	Contains *string `json:"contains,omitempty"`
-	Regex    *string `json:"regex,omitempty"`
-	Exists   *bool   `json:"exists,omitempty"`
+	Equals   *string `json:"equals,omitempty" yaml:"equals,omitempty"`
+	Contains *string `json:"contains,omitempty" yaml:"contains,omitempty"`
+	Regex    *string `json:"regex,omitempty" yaml:"regex,omitempty"`
+	Exists   *bool   `json:"exists,omitempty" yaml:"exists,omitempty"`
 }
 
 // BodyMatcherDTO is one body condition: MatcherDTO's fields flattened
 // alongside the JSONPath they apply to.
 type BodyMatcherDTO struct {
-	JSONPath string  `json:"jsonpath"`
-	Equals   *string `json:"equals,omitempty"`
-	Contains *string `json:"contains,omitempty"`
-	Regex    *string `json:"regex,omitempty"`
-	Exists   *bool   `json:"exists,omitempty"`
+	JSONPath string  `json:"jsonpath" yaml:"jsonpath"`
+	Equals   *string `json:"equals,omitempty" yaml:"equals,omitempty"`
+	Contains *string `json:"contains,omitempty" yaml:"contains,omitempty"`
+	Regex    *string `json:"regex,omitempty" yaml:"regex,omitempty"`
+	Exists   *bool   `json:"exists,omitempty" yaml:"exists,omitempty"`
 }
 
 // MatchDTO is the wire shape of domain.Match.
 type MatchDTO struct {
-	Method  string                `json:"method,omitempty"`
-	Path    string                `json:"path,omitempty"`
-	Headers map[string]MatcherDTO `json:"headers,omitempty"`
-	Query   map[string]MatcherDTO `json:"query,omitempty"`
-	Body    []BodyMatcherDTO      `json:"body,omitempty"`
+	Method  string                `json:"method,omitempty" yaml:"method,omitempty"`
+	Path    string                `json:"path,omitempty" yaml:"path,omitempty"`
+	Headers map[string]MatcherDTO `json:"headers,omitempty" yaml:"headers,omitempty"`
+	Query   map[string]MatcherDTO `json:"query,omitempty" yaml:"query,omitempty"`
+	Body    []BodyMatcherDTO      `json:"body,omitempty" yaml:"body,omitempty"`
 }
 
 // RespondDTO is the wire shape of domain.RespondAction.
 type RespondDTO struct {
-	Status    int               `json:"status"`
-	Headers   map[string]string `json:"headers,omitempty"`
-	Body      string            `json:"body"`
-	Template  bool              `json:"template,omitempty"`
-	LatencyMS *int              `json:"latency_ms,omitempty"`
+	Status    int               `json:"status" yaml:"status"`
+	Headers   map[string]string `json:"headers,omitempty" yaml:"headers,omitempty"`
+	Body      string            `json:"body" yaml:"body"`
+	Template  bool              `json:"template,omitempty" yaml:"template,omitempty"`
+	LatencyMS *int              `json:"latency_ms,omitempty" yaml:"latency_ms,omitempty"`
 }
 
 // ProxyDTO is the wire shape of domain.ProxyAction.
 type ProxyDTO struct {
-	RewriteRequestScript    *string `json:"rewrite_request,omitempty"`
-	TransformResponseScript *string `json:"transform_response,omitempty"`
-	LatencyMS               *int    `json:"latency_ms,omitempty"`
+	RewriteRequestScript    *string `json:"rewrite_request,omitempty" yaml:"rewrite_request,omitempty"`
+	TransformResponseScript *string `json:"transform_response,omitempty" yaml:"transform_response,omitempty"`
+	LatencyMS               *int    `json:"latency_ms,omitempty" yaml:"latency_ms,omitempty"`
 }
 
 // FaultDTO is the wire shape of domain.FaultAction.
 type FaultDTO struct {
-	Kind    string `json:"kind"`
-	DelayMS *int   `json:"delay_ms,omitempty"`
+	Kind    string `json:"kind" yaml:"kind"`
+	DelayMS *int   `json:"delay_ms,omitempty" yaml:"delay_ms,omitempty"`
 }
 
 // ActionDTO is the wire shape of domain.Action: exactly one of
 // Respond/Proxy/Fault is set, and that presence selects the ActionKind.
 type ActionDTO struct {
-	Respond *RespondDTO `json:"respond,omitempty"`
-	Proxy   *ProxyDTO   `json:"proxy,omitempty"`
-	Fault   *FaultDTO   `json:"fault,omitempty"`
+	Respond *RespondDTO `json:"respond,omitempty" yaml:"respond,omitempty"`
+	Proxy   *ProxyDTO   `json:"proxy,omitempty" yaml:"proxy,omitempty"`
+	Fault   *FaultDTO   `json:"fault,omitempty" yaml:"fault,omitempty"`
 }
 
 // ScriptDTO is the wire shape of domain.Script.
 type ScriptDTO struct {
-	MatchSrc   string `json:"match_src,omitempty"`
-	RespondSrc string `json:"respond_src,omitempty"`
+	MatchSrc   string `json:"match_src,omitempty" yaml:"match_src,omitempty"`
+	RespondSrc string `json:"respond_src,omitempty" yaml:"respond_src,omitempty"`
 }
 
 // ScriptFromDTO converts a ScriptDTO to its domain equivalent (nil-safe).
@@ -103,8 +90,8 @@ func ScriptToDTO(s *domain.Script) *ScriptDTO {
 
 // ScenarioDTO is the wire shape of domain.Scenario.
 type ScenarioDTO struct {
-	Responses []RespondDTO `json:"responses"`
-	OnExhaust string       `json:"on_exhaust,omitempty"`
+	Responses []RespondDTO `json:"responses" yaml:"responses"`
+	OnExhaust string       `json:"on_exhaust,omitempty" yaml:"on_exhaust,omitempty"`
 }
 
 // ScenarioFromDTO converts a ScenarioDTO to its domain equivalent (nil-safe).
@@ -137,16 +124,16 @@ func ScenarioToDTO(s *domain.Scenario) *ScenarioDTO {
 
 // MockDTO is the wire shape of domain.Mock.
 type MockDTO struct {
-	ID         string       `json:"id,omitempty"`
-	Name       string       `json:"name"`
-	Priority   int          `json:"priority,omitempty"`
-	Group      string       `json:"group,omitempty"`
-	Lifetime   string       `json:"lifetime,omitempty"`
-	TTLSeconds *int         `json:"ttl_seconds,omitempty"`
-	Match      MatchDTO     `json:"match"`
-	Script     *ScriptDTO   `json:"script,omitempty"`
-	Action     ActionDTO    `json:"action"`
-	Scenario   *ScenarioDTO `json:"scenario,omitempty"`
+	ID         string       `json:"id,omitempty" yaml:"id,omitempty"`
+	Name       string       `json:"name" yaml:"name"`
+	Priority   int          `json:"priority,omitempty" yaml:"priority,omitempty"`
+	Group      string       `json:"group,omitempty" yaml:"group,omitempty"`
+	Lifetime   string       `json:"lifetime,omitempty" yaml:"lifetime,omitempty"`
+	TTLSeconds *int         `json:"ttl_seconds,omitempty" yaml:"ttl_seconds,omitempty"`
+	Match      MatchDTO     `json:"match" yaml:"match"`
+	Script     *ScriptDTO   `json:"script,omitempty" yaml:"script,omitempty"`
+	Action     ActionDTO    `json:"action" yaml:"action"`
+	Scenario   *ScenarioDTO `json:"scenario,omitempty" yaml:"scenario,omitempty"`
 }
 
 // MatcherFromDTO converts a MatcherDTO to its domain equivalent.
@@ -280,13 +267,7 @@ func MockToDTO(m domain.Mock) MockDTO {
 	}
 }
 
-// NewMockDTOFromFields builds a MockDTO from a mock's settable fields
-// (everything but the server-assigned ID). httpadmin populates a MockDTO by
-// json.Decode-ing straight off the wire; adapters like mcp that define their
-// own parallel input schema (needed for jsonschema tags) still need to
-// construct a MockDTO to hand to MockInputFromDTO — this is the one place
-// that field mapping lives, instead of each such adapter hand-building the
-// struct literal itself.
+// NewMockDTOFromFields builds a MockDTO from a mock's settable fields (ID is server-assigned, so excluded).
 func NewMockDTOFromFields(name string, match MatchDTO, script *ScriptDTO, action ActionDTO, scenario *ScenarioDTO, priority int, group string, ttlSeconds *int, lifetime string) MockDTO {
 	return MockDTO{
 		Name: name, Priority: priority, Group: group, Lifetime: lifetime, TTLSeconds: ttlSeconds,
@@ -294,15 +275,7 @@ func NewMockDTOFromFields(name string, match MatchDTO, script *ScriptDTO, action
 	}
 }
 
-// MockInputFromDTO builds a usecase.MockInput from a MockDTO for a given
-// partition. ID is deliberately not read from the DTO: it's server-assigned.
-// Lifetime, if set, is validated here — not read into MockInput itself
-// (usecase.MockCRUD.Create always produces LifetimeEphemeral regardless) —
-// so a caller-supplied "seeded" is rejected with an explanatory error
-// instead of being silently accepted and discarded. This check lives here,
-// not in either adapter, so REST and MCP enforce it identically
-// (constitution Principle II: neither may diverge on validation behavior
-// the other lacks).
+// MockInputFromDTO builds a usecase.MockInput from a MockDTO for partition; rejects a non-empty, non-"ephemeral" Lifetime.
 func MockInputFromDTO(partition string, d MockDTO) (usecase.MockInput, error) {
 	if d.Lifetime != "" && d.Lifetime != string(domain.LifetimeEphemeral) {
 		return usecase.MockInput{}, fmt.Errorf(`%w: lifetime must be "ephemeral" or omitted — mocks can only be created as ephemeral through this API; seeded mocks come only from mounted seed config files`, domain.ErrInvalidMock)

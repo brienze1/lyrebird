@@ -13,14 +13,14 @@ tasks.md.)
 
 ```bash
 # Container (fully ephemeral — no volume needed)
-docker run --rm -p 8080:8080 -p 9090:9090 ghcr.io/brienze/lyrebird:latest
+docker run --rm -p 8080:8080 -p 9090:9090 ghcr.io/brienze1/lyrebird:latest
 
 # With seed config + durable at-rest key
 docker run --rm -p 8080:8080 -p 9090:9090 \
   -v "$PWD/config:/config:ro" -v "$PWD/data:/data" \
   -e LYREBIRD_DATA_KEY="$(openssl rand -base64 32)" \
   -e LYREBIRD_TRAFFIC_TTL=24h \
-  ghcr.io/brienze/lyrebird:latest
+  ghcr.io/brienze1/lyrebird:latest
 ```
 
 - `:8080` = data-plane proxy listener (point your SUT here).
@@ -65,14 +65,7 @@ docker run --rm -p 8080:8080 -p 9090:9090 \
 2. After 2s the ephemeral mock is gone; after `POST /__lyrebird/reset` the seeded mock remains.
 3. Traffic older than `LYREBIRD_TRAFFIC_TTL` is purged within one GC cycle.
 
-## Scenario G — Security defaults (SC-007) — PLANNED, NOT YET IMPLEMENTED
-
-> As of pass 10 of the ongoing refactor, `internal/infra/auth` is still a stub
-> (tracked as tasks.md's T055-T057, milestone "Auth"). `LYREBIRD_AUTH_KEYS` is
-> parsed by config but never consulted by any handler; there is no
-> `/__lyrebird/auth/token` route; the control plane is always open regardless
-> of this env var. The scenario below describes the *intended* end state once
-> T055-T057 ship — do not expect it to work against the current build.
+## Scenario G — Security defaults (SC-007)
 
 1. Start with no `LYREBIRD_AUTH_KEYS` → control plane open.
 2. Restart with `LYREBIRD_AUTH_KEYS=secret1` → control-plane calls without a bearer token are
@@ -81,5 +74,7 @@ docker run --rm -p 8080:8080 -p 9090:9090 \
 
 ## Scenario H — Delivery (SC-008)
 
-- Merge a PR to `main` → `release.yml` publishes an updated `ghcr.io/brienze/lyrebird:latest` with no
-  manual steps.
+- Merge a PR to `main` → `release.yml` publishes updated `ghcr.io/brienze1/lyrebird:main` and
+  `:sha-<short>` images with no manual steps (a `vX.Y.Z` tag additionally publishes `:X.Y.Z`, `:X.Y`,
+  `:X`, and `:latest` — SC-008 only requires an automatically-published updated image, which the
+  plain `main`-merge tags already satisfy).

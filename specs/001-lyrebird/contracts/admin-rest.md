@@ -5,15 +5,13 @@ anything MCP lacks (Principle II, FR-018). For curl/scripts/health and CI. Base 
 Partition via `X-Lyrebird-Space` header (default `default`). When auth is enabled, all routes except
 the token endpoint and health require `Authorization: Bearer` (FR-031).
 
-> **As of pass 12 of the ongoing refactor**: rows marked **(PLANNED, NOT YET IMPLEMENTED)** below have
-> no route registered in `internal/bootstrap/app.go` today — confirmed against the real route table
-> (`internal/adapters/httpadmin/*.go`'s exported handlers). This includes import/export (tasks.md
-> T061). Every other row IS implemented and registered exactly as documented (the auth-token flow
-> shipped in T055-T057, the examples/recipe endpoints shipped in T058-T060 — neither is PLANNED
-> anymore). Note `GET /__lyrebird/metrics` specifically: `metrics` exists as an MCP tool
-> (`internal/adapters/mcp/traffic.go`) but has no REST twin — this is allowed under FR-018 (MCP may
-> have capabilities REST lacks; only the reverse is forbidden), but the row below is aspirational, not
-> live, until a REST handler is added.
+> **As of Phase 12 (tasks.md T061)**: import/export now ships (`GET /__lyrebird/export`,
+> `POST /__lyrebird/import`), registered unconditionally in `internal/bootstrap/app.go` — no longer
+> PLANNED. Every row below is implemented and registered exactly as documented (the auth-token flow
+> shipped in T055-T057, the examples/recipe endpoints shipped in T058-T060) except
+> `GET /__lyrebird/metrics`: `metrics` exists as an MCP tool (`internal/adapters/mcp/traffic.go`) but
+> has no REST twin — this is allowed under FR-018 (MCP may have capabilities REST lacks; only the
+> reverse is forbidden), but the row below is aspirational, not live, until a REST handler is added.
 
 | Method & Path | Body / Query | Maps to | Requirement |
 |---------------|--------------|---------|-------------|
@@ -32,7 +30,8 @@ the token endpoint and health require `Authorization: Bearer` (FR-031).
 | `GET/POST/DELETE /__lyrebird/spaces[/{id}]` | Partition | space tools | FR-023/24 |
 | `GET /__lyrebird/mitm/ca-cert` | — (raw `application/x-pem-file` body, not JSON) | get_mitm_ca_cert; only registered when `LYREBIRD_MITM_ENABLED=true` (T054/T067) | FR-033 |
 | `GET /__lyrebird/examples[/{id}]` | `?query=` (list only) | list/get_example | FR-022 |
-| `POST /__lyrebird/import` / `GET /__lyrebird/export` **(PLANNED, NOT YET IMPLEMENTED)** | YAML bundle | seed round-trip | FR-034 |
+| `GET /__lyrebird/export` | — (returns `application/x-yaml`) | export_config; ephemeral mocks + upstreams only, current space | tasks.md T061 |
+| `POST /__lyrebird/import` | YAML bundle (same shape `export_config` returns, or a `contracts/seed-config.md`-shaped file) | import_config; additive, current space | tasks.md T061 |
 | `POST /__lyrebird/auth/token` | `{ client_key }` | issue JWT (auth-enabled only; exempt from the auth gate itself) | FR-031 |
 | `GET /__lyrebird/healthz` `GET /__lyrebird/readyz` | — | liveness/readiness (never authed) | FR-034 |
 

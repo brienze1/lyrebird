@@ -23,10 +23,14 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-// Store owns the SQLite connection and the sealer used to encrypt/decrypt
-// sensitive blob columns at the storage boundary.
+// readerPoolSize bounds concurrent connections in the read-only pool.
+const readerPoolSize = 8
+
+// Store owns the SQLite connections (a single-connection writer and a
+// multi-connection reader pool) and the sealer used to encrypt/decrypt blobs.
 type Store struct {
 	db     *sql.DB
+	readDB *sql.DB
 	sealer crypto.Sealer
 	log    *slog.Logger
 }
@@ -78,7 +82,24 @@ func Open(ctx context.Context, path string, sealer crypto.Sealer, log *slog.Logg
 		}
 	}
 
-	return &Store{db: db, sealer: sealer, log: log}, nil
+	readDB, err := openReadPool(path)
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: open read pool: %w", err)
+	}
+
+	return &Store{db: db, readDB: readDB, sealer: sealer, log: log}, nil
+}
+
+// openReadPool opens a separate, multi-connection *sql.DB against the same
+// database file, used for hot-path reads.
+func openReadPool(path string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	db.SetMaxOpenConns(readerPoolSize)
+	return db, nil
 }
 
 // openAndMigrate opens path and applies the schema. CREATE TABLE IF NOT
@@ -173,9 +194,11 @@ func quarantine(path string) (string, error) {
 	return dest, nil
 }
 
-// Close releases the underlying database connection.
+// Close releases both underlying database connections.
 func (s *Store) Close() error {
-	return s.db.Close()
+	writeErr := s.db.Close()
+	readErr := s.readDB.Close()
+	return errors.Join(writeErr, readErr)
 }
 
 // InsertRawEphemeralMock is a low-level fixture helper for tests: it seals

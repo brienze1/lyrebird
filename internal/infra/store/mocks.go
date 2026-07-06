@@ -65,7 +65,7 @@ func (s *Store) GetMock(ctx context.Context, partition, id string) (domain.Mock,
 // decrypts successfully under the Store's own sealer. A row that fails to
 // decrypt is silently skipped, not treated as an error (FR-029).
 func (s *Store) ListMocks(ctx context.Context, partition string) ([]domain.Mock, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.readDB.QueryContext(ctx, `
 		SELECT id, "partition", name, priority, "group", created_at, expires_at, match_blob, script_blob, scenario_blob, action_blob
 		FROM ephemeral_mocks WHERE "partition" = ?`, partition)
 	if err != nil {

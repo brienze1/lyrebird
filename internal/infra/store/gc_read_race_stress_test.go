@@ -14,31 +14,9 @@ import (
 	"github.com/brienze1/lyrebird/internal/usecase"
 )
 
-// TestConcurrentReadsAgainstGCPruneStress investigates a DIFFERENT race class
-// than gc_scenario_race_stress_test.go's (which covers a Go-level TOCTOU
-// between AdvanceScenario and GC pruning). This test asks: can GC's
-// concurrent DELETEs (PruneTraffic, PruneExpiredEphemeralMocks) ever corrupt
-// the OUTPUT of a single, in-flight ListMocks/ListTraffic/GetTraffic/GetMock
-// call — a panic, a half-decoded row, or a row whose plaintext columns and
-// decrypted blob columns come from two different underlying rows? "The row
-// is simply gone on a later read" is expected and fine; this test looks for
-// something actually wrong observed WITHIN one read call.
-//
-// The architectural hypothesis under test: store.go's db.SetMaxOpenConns(1)
-// means there is exactly one physical *sql.DB connection for the whole
-// process. database/sql checks a connection out of its pool exclusively for
-// the duration of a Query/QueryContext call's row iteration (until
-// rows.Close(), explicit or automatic when Next() is exhausted) — so a
-// concurrent ExecContext/BeginTx (GC's deletes) has no free connection to
-// run on and must block until the in-flight read releases it. If true, this
-// whole race class is impossible by construction, not just empirically rare.
-// This test does not take that on faith: every mock/traffic row is tagged
-// with content deterministically derived from its own ID (a "body-<id>"
-// RespondAction.Body, a "req-<id>"/"resp-<id>" traffic Request/Response,
-// etc., spread across both plaintext and independently-encrypted columns),
-// so any cross-row mixing — which a genuine connection-sharing violation
-// could plausibly cause — would be caught as a concrete mismatch, not just
-// inferred from the absence of a crash.
+// TestConcurrentReadsAgainstGCPruneStress proves GC's concurrent DELETEs
+// never corrupt the output of an in-flight read call (panic, half-decoded
+// row, or cross-row mixing), relying on SQLite's WAL snapshot guarantee.
 func TestConcurrentReadsAgainstGCPruneStress(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
@@ -308,8 +286,9 @@ func TestConcurrentReadsAgainstGCPruneStress(t *testing.T) {
 	for _, iv := range listIntervals {
 		listBusy += iv.end.Sub(iv.start)
 	}
-	t.Logf("ListMocks calls occupied %v of the %v stress window (%.1f%%) — high occupancy is consistent with "+
-		"ListMocks holding the sole connection exclusively for its whole iteration",
+	t.Logf("ListMocks calls occupied %v of the %v stress window (%.1f%%) — informational only; ListMocks now reads "+
+		"through its own multi-connection pool (s.readDB), so high occupancy here no longer implies exclusive "+
+		"checkout of GC's writer connection the way it did before SC-009's read/write pool split",
 		listBusy, stressDuration, 100*float64(listBusy)/float64(stressDuration))
 }
 
