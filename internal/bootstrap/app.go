@@ -263,6 +263,8 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	if c.issueTokenUC != nil {
 		controlMux.HandleFunc("POST /__lyrebird/auth/token", httpadmin.IssueToken(c.issueTokenUC))
 	}
+	controlMux.HandleFunc("GET /__lyrebird/examples", httpadmin.ListExamples)
+	controlMux.HandleFunc("GET /__lyrebird/examples/{id}", httpadmin.GetExample)
 	controlMux.Handle("/mcp", mcp.Handler(c.mcpServer))
 
 	// serverCtx (not the raw ctx Run was called with) is what a FaultTimeout

@@ -1,0 +1,18 @@
+{
+  "id": "gcp-gcs",
+  "title": "GCP Cloud Storage objects.get (JSON API, path-routed)",
+  "provider": "gcp",
+  "service": "gcs",
+  "description": "Cloud Storage's JSON API GETs object metadata at /storage/v1/b/{bucket}/o/{object}. Point the client library at Lyrebird via its endpoint-override option (e.g. Go's storage.NewClient(ctx, option.WithEndpoint(...))) with a plain-HTTP transport.",
+  "mock": {
+    "name": "gcp-gcs-get-object",
+    "match": { "method": "GET", "path": "/storage/v1/b/example-bucket/o/example-object" },
+    "action": {
+      "respond": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "body": "{\"name\":\"example-object\",\"bucket\":\"example-bucket\",\"contentType\":\"text/plain\",\"size\":\"20\"}"
+      }
+    }
+  }
+}

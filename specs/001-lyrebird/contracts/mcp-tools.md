@@ -13,9 +13,8 @@ contracts/admin-rest.md — the one route explicitly exempt from the auth gate) 
 `Authorization: Bearer` header on every subsequent request to `/mcp` too, including the initial
 `initialize` call. See tasks.md T056 for why an MCP-side equivalent isn't added.
 
-> **As of pass 12 of the ongoing refactor**: `list_examples`/`get_example` below (FR-022) are not yet
-> registered (tasks.md T058-T060, `internal/adapters/examples/doc.go` is a placeholder). Every other
-> tool in this document IS implemented and registered exactly as documented — confirmed against the
+> **As of pass 12 of the ongoing refactor**: every tool in this document IS implemented and registered
+> exactly as documented (`list_examples`/`get_example` shipped in T058-T060) — confirmed against the
 > real `sdkmcp.AddTool` registrations in `internal/adapters/mcp/*.go`.
 
 ## Guide & scripting docs
@@ -24,8 +23,8 @@ contracts/admin-rest.md — the one route explicitly exempt from the auth gate) 
 |------|-------|--------|-------------|
 | `lyrebird_guide` | — | Concepts, composition, ≥1 minimal valid mock example. | FR-019 |
 | `script_sandbox_api` | — | Docs of injected JS globals (`req`, `uuid()`, `now()`, `faker`, `jsonpath()`). | FR-017 |
-| `list_examples` **(PLANNED, NOT YET IMPLEMENTED)** | `{ query? }` | Recipe index (AWS/GCP/third-party as plain HTTP). Content only. | FR-022 |
-| `get_example` **(PLANNED, NOT YET IMPLEMENTED)** | `{ id }` | One recipe → ready-to-adapt `create_mock` payload. | FR-022 |
+| `list_examples` | `{ query? }` | Recipe index (AWS/GCP/generic as plain HTTP). Content only, no `mock` field per entry. | FR-022 |
+| `get_example` | `{ id }` | One recipe → ready-to-adapt `create_mock` payload (`mock` is absent/null for guidance-only entries, e.g. the endpoint-injection how-to). | FR-022 |
 
 ## Mocks
 

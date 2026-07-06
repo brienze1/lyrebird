@@ -1,0 +1,18 @@
+{
+  "id": "gcp-pubsub",
+  "title": "GCP Pub/Sub topics.publish (REST API, path-routed)",
+  "provider": "gcp",
+  "service": "pubsub",
+  "description": "Pub/Sub's REST API POSTs to /v1/projects/{project}/topics/{topic}:publish. Point the client library at Lyrebird via its API-endpoint override option (e.g. Go's pubsub.NewClient(ctx, project, option.WithEndpoint(...)), or GOOGLE_API_USE_MTLS_ENDPOINT/custom HTTP client for other languages) and disable TLS transport security for a plain-HTTP Lyrebird target.",
+  "mock": {
+    "name": "gcp-pubsub-publish",
+    "match": { "method": "POST", "path": "/v1/projects/example-project/topics/example-topic:publish" },
+    "action": {
+      "respond": {
+        "status": 200,
+        "headers": { "Content-Type": "application/json" },
+        "body": "{\"messageIds\":[\"1234567890\"]}"
+      }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "aws-s3",
+  "title": "AWS S3 GetObject (REST-XML protocol, path-routed)",
+  "provider": "aws",
+  "service": "s3",
+  "description": "S3 uses the REST-XML protocol: operations are routed by URL path and HTTP method (GET /{bucket}/{key} for GetObject), unlike the query/JSON-protocol services above. Point the SDK at Lyrebird via AWS_ENDPOINT_URL and set UsePathStyle/ForcePathStyle so the bucket stays in the path rather than becoming a subdomain Lyrebird would never see.",
+  "mock": {
+    "name": "aws-s3-get-object",
+    "match": { "method": "GET", "path": "/example-bucket/example-object.txt" },
+    "action": {
+      "respond": {
+        "status": 200,
+        "headers": { "Content-Type": "text/plain", "ETag": "\"9a0364b9e99bb480dd25e1f0284c8555\"" },
+        "body": "Hello from Lyrebird"
+      }
+    }
+  }
+}

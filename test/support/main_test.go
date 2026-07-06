@@ -42,4 +42,5 @@ func InitializeScenario(ctx *godog.ScenarioContext) {
 	RegisterAdvancedProxySteps(ctx, s)
 	RegisterMITMSteps(ctx, s)
 	RegisterAuthSteps(ctx, s)
+	RegisterExamplesSteps(ctx, s)
 }

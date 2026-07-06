@@ -278,12 +278,12 @@ forward-proxy (MITM), and opt-in scenarios. **Independent test**: quickstart Sce
 
 ## Phase 11: Recipe Library — M5
 
-- [ ] T058 [P] [POLISH] Embed recipe content in `internal/adapters/examples` (AWS SNS query→XML, SQS,
+- [x] T058 [P] [POLISH] Embed recipe content in `internal/adapters/examples` (AWS SNS query→XML, SQS,
   DynamoDB `X-Amz-Target`, Secrets Manager, S3 REST-XML; GCP Pub/Sub, GCS, KMS; endpoint-injection
   how-to). Content only — no engine branches (Principle I).
-- [ ] T059 [POLISH] `list_examples`/`get_example` MCP + REST returning ready-to-adapt `create_mock`
+- [x] T059 [POLISH] `list_examples`/`get_example` MCP + REST returning ready-to-adapt `create_mock`
   payloads (FR-022).
-- [ ] T060 [POLISH] End-to-end integration test: a real AWS SDK client pointed at Lyrebird via
+- [x] T060 [POLISH] End-to-end integration test: a real AWS SDK client pointed at Lyrebird via
   `AWS_ENDPOINT_URL` gets a mock response shaped by a recipe.
 
 ---

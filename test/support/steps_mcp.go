@@ -172,6 +172,34 @@ func (m *mcpState) theMCPStructuredResultFieldEquals(path, want string) error {
 	return nil
 }
 
+// theMCPStructuredResultArrayFieldHasNEntries asserts a structured-content
+// field navigates to a JSON array of exactly n elements.
+func (m *mcpState) theMCPStructuredResultArrayFieldHasNEntries(path string, n int) error {
+	if m.lastResult == nil || m.lastResult.StructuredContent == nil {
+		return fmt.Errorf("MCP result has no structured content")
+	}
+	raw, err := json.Marshal(m.lastResult.StructuredContent)
+	if err != nil {
+		return fmt.Errorf("marshal structured content: %w", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return fmt.Errorf("unmarshal structured content: %w", err)
+	}
+	got, err := navigateField(doc, path)
+	if err != nil {
+		return err
+	}
+	arr, ok := got.([]any)
+	if !ok {
+		return fmt.Errorf("structured field %q = %T, want a JSON array", path, got)
+	}
+	if len(arr) != n {
+		return fmt.Errorf("structured field %q has %d entries, want %d", path, len(arr), n)
+	}
+	return nil
+}
+
 func navigateField(doc map[string]any, path string) (any, error) {
 	parts := strings.Split(path, ".")
 	var cur any = doc
@@ -227,6 +255,7 @@ func RegisterMcpSteps(sc *godog.ScenarioContext, s *appState) {
 	sc.Step(`^the MCP call fails with an explanatory error$`, m.theMCPCallFailsWithAnExplanatoryError)
 	sc.Step(`^the MCP result text contains "([^"]*)"$`, m.theMCPResultTextContains)
 	sc.Step(`^the MCP structured result field "([^"]*)" equals "([^"]*)"$`, m.theMCPStructuredResultFieldEquals)
+	sc.Step(`^the MCP structured result array field "([^"]*)" has (\d+) entries$`, m.theMCPStructuredResultArrayFieldHasNEntries)
 
 	// Closing the client session here — via appState's preShutdownCleanup,
 	// run before app.Shutdown — matters: Shutdown's graceful-drain otherwise
