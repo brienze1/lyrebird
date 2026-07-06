@@ -61,11 +61,34 @@ func TestSetUpstreamRejectsInvalidInput(t *testing.T) {
 
 func TestListUpstreamsDelegatesToRepo(t *testing.T) {
 	repo := &fakeUpstreamRepo{set: []domain.Upstream{{Partition: "default", MatchHost: "a", TargetURL: "https://a"}}}
-	got, err := NewListUpstreams(repo).Execute(context.Background(), "default")
+	got, err := NewListUpstreams(repo, &fakeSeededSource{}).Execute(context.Background(), "default")
 	if err != nil {
 		t.Fatalf("Execute(): %v", err)
 	}
 	if len(got) != 1 {
 		t.Errorf("got = %+v, want 1 upstream", got)
+	}
+}
+
+func TestListUpstreamsIncludesSeededUpstreams(t *testing.T) {
+	repo := &fakeUpstreamRepo{set: []domain.Upstream{{Partition: "default", MatchHost: "runtime.example", TargetURL: "https://runtime.example"}}}
+	seeds := &fakeSeededSource{upstreams: []domain.Upstream{
+		{Partition: "default", MatchHost: "seeded.example", TargetURL: "https://seeded.example"},
+		{Partition: "other", MatchHost: "other.example", TargetURL: "https://other.example"},
+	}}
+	got, err := NewListUpstreams(repo, seeds).Execute(context.Background(), "default")
+	if err != nil {
+		t.Fatalf("Execute(): %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got = %+v, want 2 upstreams (1 runtime + 1 seeded, other partition's excluded)", got)
+	}
+	var sawRuntime, sawSeeded bool
+	for _, u := range got {
+		sawRuntime = sawRuntime || u.MatchHost == "runtime.example"
+		sawSeeded = sawSeeded || u.MatchHost == "seeded.example"
+	}
+	if !sawRuntime || !sawSeeded {
+		t.Errorf("got = %+v, want both runtime.example and seeded.example present", got)
 	}
 }

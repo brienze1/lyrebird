@@ -147,7 +147,7 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 	gcLoop.Start(ctx)
 
 	setUpstreamUC := usecase.NewSetUpstream(st)
-	listUpstreamsUC := usecase.NewListUpstreams(st)
+	listUpstreamsUC := usecase.NewListUpstreams(st, sd)
 	recordTrafficUC := usecase.NewRecordTraffic(st, clock.System{}, idgen.UUID{})
 	listTrafficUC := usecase.NewListTraffic(st)
 	getTrafficUC := usecase.NewGetTraffic(st)

@@ -15,7 +15,7 @@ func TestExportSeeds_ReturnsUpstreamsAndOnlyEphemeralMocks(t *testing.T) {
 	}
 
 	upstreamRepo := &fakeUpstreamRepo{set: []domain.Upstream{{Partition: "default", MatchHost: "example.local", TargetURL: "https://example.local"}}}
-	uc := NewExportSeeds(NewListUpstreams(upstreamRepo), mockCRUD)
+	uc := NewExportSeeds(NewListUpstreams(upstreamRepo, seeds), mockCRUD)
 
 	bundle, err := uc.Execute(context.Background(), "default")
 	if err != nil {
@@ -29,6 +29,21 @@ func TestExportSeeds_ReturnsUpstreamsAndOnlyEphemeralMocks(t *testing.T) {
 	}
 	if len(bundle.Mocks) != 1 || bundle.Mocks[0].Name != "ephemeral" {
 		t.Errorf("Mocks = %+v, want only the ephemeral mock (not the seeded one)", bundle.Mocks)
+	}
+}
+
+func TestExportSeeds_ExcludesSeededUpstreams(t *testing.T) {
+	mockCRUD, seeds := newCRUD()
+	seeds.upstreams = []domain.Upstream{{Partition: "default", MatchHost: "seeded.example", TargetURL: "https://seeded.example"}}
+	upstreamRepo := &fakeUpstreamRepo{set: []domain.Upstream{{Partition: "default", MatchHost: "runtime.example", TargetURL: "https://runtime.example"}}}
+	uc := NewExportSeeds(NewListUpstreams(upstreamRepo, seeds), mockCRUD)
+
+	bundle, err := uc.Execute(context.Background(), "default")
+	if err != nil {
+		t.Fatalf("Execute(): %v", err)
+	}
+	if len(bundle.Upstreams) != 1 || bundle.Upstreams[0].MatchHost != "runtime.example" {
+		t.Errorf("Upstreams = %+v, want only the runtime upstream (not the seeded one)", bundle.Upstreams)
 	}
 }
 

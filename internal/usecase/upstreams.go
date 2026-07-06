@@ -27,13 +27,33 @@ func (uc *SetUpstream) Execute(ctx context.Context, u domain.Upstream) error {
 	return uc.repo.SetUpstream(ctx, u)
 }
 
-// ListUpstreams returns every upstream configured in a partition.
-type ListUpstreams struct{ repo UpstreamRepo }
+// ListUpstreams returns every upstream configured in a partition — runtime
+// (store-backed) and seeded (in-memory, from /config) together.
+type ListUpstreams struct {
+	repo  UpstreamRepo
+	seeds SeededUpstreamSource
+}
 
 // NewListUpstreams builds a ListUpstreams use case.
-func NewListUpstreams(repo UpstreamRepo) *ListUpstreams { return &ListUpstreams{repo: repo} }
+func NewListUpstreams(repo UpstreamRepo, seeds SeededUpstreamSource) *ListUpstreams {
+	return &ListUpstreams{repo: repo, seeds: seeds}
+}
 
-// Execute returns every upstream configured in partition.
+// Execute returns every upstream configured in partition, runtime upstreams
+// first followed by seeded ones — the same ordering MockCRUD.List uses for
+// mocks.
 func (uc *ListUpstreams) Execute(ctx context.Context, partition string) ([]domain.Upstream, error) {
+	runtime, err := uc.repo.ListUpstreams(ctx, partition)
+	if err != nil {
+		return nil, err
+	}
+	return append(append([]domain.Upstream{}, runtime...), uc.seeds.SeededUpstreams(partition)...), nil
+}
+
+// ExecuteRuntime returns only partition's runtime (store-backed) upstreams,
+// excluding seeded ones — used by ExportSeeds, which (like mock export)
+// never re-exports seeded content that already round-trips through mounted
+// seed config.
+func (uc *ListUpstreams) ExecuteRuntime(ctx context.Context, partition string) ([]domain.Upstream, error) {
 	return uc.repo.ListUpstreams(ctx, partition)
 }

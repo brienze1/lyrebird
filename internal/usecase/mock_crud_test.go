@@ -107,13 +107,26 @@ func (f *fakeMockRepo) PruneExpiredEphemeralMocks(_ context.Context, _ time.Time
 	return 0, nil
 }
 
-type fakeSeededSource struct{ mocks []domain.Mock }
+type fakeSeededSource struct {
+	mocks     []domain.Mock
+	upstreams []domain.Upstream
+}
 
 func (f *fakeSeededSource) SeededMocks(partition string) []domain.Mock {
 	var out []domain.Mock
 	for _, m := range f.mocks {
 		if m.Partition == partition {
 			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func (f *fakeSeededSource) SeededUpstreams(partition string) []domain.Upstream {
+	var out []domain.Upstream
+	for _, u := range f.upstreams {
+		if u.Partition == partition {
+			out = append(out, u)
 		}
 	}
 	return out
