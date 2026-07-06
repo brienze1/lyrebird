@@ -338,3 +338,15 @@ func (s Seeds) SeededMocks(partition string) []domain.Mock {
 	}
 	return out
 }
+
+// SeededUpstreams implements usecase.SeededUpstreamSource: every seeded
+// upstream loaded into s that belongs to partition.
+func (s Seeds) SeededUpstreams(partition string) []domain.Upstream {
+	var out []domain.Upstream
+	for _, u := range s.Upstreams {
+		if u.Partition == partition {
+			out = append(out, u)
+		}
+	}
+	return out
+}

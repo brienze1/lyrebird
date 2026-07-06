@@ -26,9 +26,10 @@ func NewExportSeeds(upstreams *ListUpstreams, mocks *MockCRUD) *ExportSeeds {
 	return &ExportSeeds{upstreams: upstreams, mocks: mocks}
 }
 
-// Execute excludes seeded mocks, since they already round-trip through mounted seed config.
+// Execute excludes seeded mocks and seeded upstreams, since they already
+// round-trip through mounted seed config.
 func (uc *ExportSeeds) Execute(ctx context.Context, partition string) (ExportBundle, error) {
-	upstreams, err := uc.upstreams.Execute(ctx, partition)
+	upstreams, err := uc.upstreams.ExecuteRuntime(ctx, partition)
 	if err != nil {
 		return ExportBundle{}, fmt.Errorf("export: list upstreams: %w", err)
 	}

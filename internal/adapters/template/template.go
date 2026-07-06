@@ -10,8 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/tidwall/gjson"
-
+	"github.com/brienze1/lyrebird/internal/adapters/jsonpath"
 	"github.com/brienze1/lyrebird/internal/usecase"
 )
 
@@ -62,7 +61,7 @@ func resolve(ref []byte, in usecase.MatchInput) string {
 		return firstValue(in.Query, name)
 	case strings.HasPrefix(expr, "body."):
 		path := strings.TrimPrefix(expr, "body.")
-		return gjson.GetBytes(in.Body, path).String()
+		return jsonpath.GetBytes(in.Body, path).String()
 	default:
 		return ""
 	}

@@ -163,6 +163,13 @@ type SeededMockSource interface {
 	SeededMocks(partition string) []domain.Mock
 }
 
+// SeededUpstreamSource returns the seeded (in-memory, TTL/reset-immune)
+// upstreams for a partition. Implemented directly by seeds.Seeds, mirroring
+// SeededMockSource — never by the store-backed UpstreamRepo.
+type SeededUpstreamSource interface {
+	SeededUpstreams(partition string) []domain.Upstream
+}
+
 // ScriptEval evaluates a domain.Script's match_src/respond_src hooks inside
 // a sandboxed JS VM against a MatchInput. A port for the same reason as
 // MatchEval/Templater: usecase cannot import internal/adapters/scripting

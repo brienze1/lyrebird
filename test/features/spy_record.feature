@@ -62,6 +62,14 @@ Feature: Spy record and passthrough
     And the recorded traffic request body is truncated
     And the recorded traffic request body_total_size is 1000
 
+  Scenario: An upstream declared in a seed file is resolvable for spy passthrough
+    Given a seed file declares an upstream "seeded.local" in partition "default" pointing at a fake upstream
+    And Lyrebird boots
+    When I send a GET request to "/anything" on the data plane with host "seeded.local"
+    Then the response status is 200
+    And the response body is "seeded-upstream-response"
+    And the recorded traffic for that request has decision "proxied"
+
   Scenario: Partition isolation for upstream resolution
     Given Lyrebird boots
     And an upstream "shared.local" configured in partition "team-a" pointing at a fake upstream
