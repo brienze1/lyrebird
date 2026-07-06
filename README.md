@@ -110,3 +110,9 @@ Notes:
   walkthrough (spy, mocks, MCP workflow, scripting, multi-tenancy, GC, auth, delivery).
 - [`specs/001-lyrebird/contracts/`](specs/001-lyrebird/contracts/) — the MCP tool contract, Admin
   REST contract, and seed-config YAML schema.
+
+## License
+
+[MIT](LICENSE) — free to use, modify, and redistribute, including commercially. The published
+Docker image (`ghcr.io/brienze1/lyrebird`) carries the same license (see its `LICENSE` file and
+`org.opencontainers.image.licenses` label).
