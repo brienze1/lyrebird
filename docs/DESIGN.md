@@ -277,12 +277,27 @@ there. M5 is now lightweight (knowledge, not code), so it can slot in early or a
 
 - **Multi-stage build**, `CGO_ENABLED=0` static binary (pure-Go SQLite), final stage `scratch` or
   distroless → image measured in single-digit MB.
-- **Ports:** proxy listener(s) (e.g. `:8080`) + control plane (MCP HTTP + admin REST, e.g. `:9090`).
+- **Ports:** proxy listener(s) (e.g. `:8080`) + control plane (MCP HTTP + admin REST, e.g. `:9090`)
+  + optional plaintext-gRPC data plane (e.g. `:50051`, only when `LYREBIRD_GRPC_PORT` is set).
 - **Volumes:** `/config` (mount seed YAMLs, read-only) and `/data` (SQLite, optional — fine to run
   fully ephemeral with no volume).
 - **Config via env:** `LYREBIRD_TRAFFIC_TTL`, `LYREBIRD_DEFAULT_SPACE`, `LYREBIRD_ALLOW_PROXY_HOSTS`,
   `LYREBIRD_AUTH_KEYS` (presence enables control-plane auth), `LYREBIRD_TOKEN_TTL` (default `1h`),
-  `LYREBIRD_DATA_KEY` (optional stable at-rest key), TLS/CA settings, etc. See §10.
+  `LYREBIRD_DATA_KEY` (optional stable at-rest key), `LYREBIRD_GRPC_PORT` (opt-in plaintext-gRPC
+  data plane, off when unset), TLS/CA settings, etc. See §10.
+
+### gRPC data plane (generic, opt-in)
+
+Set `LYREBIRD_GRPC_PORT` (e.g. `50051`) to serve a **plaintext (h2c, no TLS, no auth)** gRPC data
+plane alongside the HTTP one. It is generic: a unary call is routed by its method path
+(`/pkg.Service/Method`) through the SAME match→respond model, the request protobuf is parsed at the
+wire level (field number → value) so mocks can match request fields with no compiled schema, and a
+matched mock's respond body is a **response field-spec** re-encoded to protobuf wire. There is no
+per-service code — GCP KMS, Pub/Sub, etc. are delivered as recipes (see `list_examples`:
+`gcp-kms-grpc`, `gcp-pubsub-grpc`). Unmatched or non-unary calls get a clean `Unimplemented`; only
+`respond` actions are served (proxy/fault are HTTP-plane only). gRPC mocks are ordinary
+seeded/ephemeral mocks and honor reset/GC exactly like HTTP mocks. Response field-spec grammar and
+field mappings: see `specs/002-grpc-data-plane/`.
 - Ship a `docker-compose.yml` example (local) and a bare `docker run` one-liner; HML = same image as
   a long-lived service behind the NLB, agents connect to its MCP HTTP endpoint.
 

@@ -17,8 +17,8 @@ func TestListExamplesReturnsEveryRecipe(t *testing.T) {
 	if !ok {
 		t.Fatalf("examples field = %+v, want an array", out["examples"])
 	}
-	if len(list) != 9 {
-		t.Errorf("list_examples returned %d entries, want 9", len(list))
+	if len(list) != 11 {
+		t.Errorf("list_examples returned %d entries, want 11", len(list))
 	}
 }
 

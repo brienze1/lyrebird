@@ -44,4 +44,6 @@ func InitializeScenario(ctx *godog.ScenarioContext) {
 	RegisterAuthSteps(ctx, s)
 	RegisterExamplesSteps(ctx, s)
 	RegisterImportExportSteps(ctx, s)
+	RegisterGRPCSteps(ctx, s)
+	RegisterGRPCKMSSteps(ctx, s)
 }

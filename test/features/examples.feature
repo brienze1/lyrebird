@@ -9,14 +9,14 @@ Feature: Recipe library (mock-the-SDK examples)
 
   Scenario: Listing examples over REST returns every recipe as a summary, without the mock payload
     When I list examples over REST with no query
-    Then the example list has 9 entries
+    Then the example list has 11 entries
     And no listed example includes a "mock" field
 
   Scenario: Listing examples over MCP returns every recipe as a summary
     Given an MCP client is connected to the control plane
     When I call the MCP tool "list_examples" with arguments '{}'
     Then the MCP call succeeds
-    And the MCP structured result array field "examples" has 9 entries
+    And the MCP structured result array field "examples" has 11 entries
 
   Scenario: Filtering examples by query narrows the list to matching providers
     When I list examples over REST with query "aws"
@@ -56,3 +56,5 @@ Feature: Recipe library (mock-the-SDK examples)
       | gcp-pubsub          |
       | gcp-gcs             |
       | gcp-kms             |
+      | gcp-kms-grpc        |
+      | gcp-pubsub-grpc     |

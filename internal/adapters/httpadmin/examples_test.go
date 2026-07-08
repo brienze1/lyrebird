@@ -18,8 +18,8 @@ func TestListExamplesReturnsEveryRecipe(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &list); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(list) != 9 {
-		t.Errorf("returned %d entries, want 9", len(list))
+	if len(list) != 11 {
+		t.Errorf("returned %d entries, want 11", len(list))
 	}
 	for _, entry := range list {
 		if _, ok := entry["mock"]; ok {

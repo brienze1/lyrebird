@@ -1,0 +1,19 @@
+{
+  "id": "gcp-pubsub-grpc",
+  "title": "GCP Pub/Sub Publisher GetTopic + Publish (gRPC emulator)",
+  "provider": "gcp",
+  "service": "pubsub",
+  "description": "Mocks google.pubsub.v1.Publisher over plaintext gRPC on Lyrebird's gRPC data plane. Set PUBSUB_EMULATOR_HOST=host:port so the Pub/Sub client dials Lyrebird plaintext with no auth. This recipe's mock answers GetTopic by echoing the requested topic (request field 1) back as Topic.name (response field 1), so a client's boot-time topic-exists check passes. Publish is a separate seed mock (see below) that returns a synthetic message id and OK — the publish path is not functionally exercised locally. Add this second mock to /config to accept publishes: match POST /google.pubsub.v1.Publisher/Publish, respond body {\"f1\":[{\"string\":\"1\"}]} (repeated message_ids field 1). The respond body is a Lyrebird gRPC response field-spec (fN -> value/copyFrom), not raw JSON.",
+  "mock": {
+    "name": "gcp-pubsub-gettopic-echo",
+    "match": {
+      "method": "POST",
+      "path": "/google.pubsub.v1.Publisher/GetTopic"
+    },
+    "action": {
+      "respond": {
+        "body": "{\"f1\":{\"copyFrom\":1}}"
+      }
+    }
+  }
+}

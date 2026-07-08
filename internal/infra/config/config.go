@@ -17,11 +17,18 @@ import (
 type Config struct {
 	DataPlaneAddr    string
 	ControlPlaneAddr string
-	TrafficTTL       time.Duration
-	DefaultSpace     string
-	AllowProxyHosts  []string
-	AuthKeys         []string
-	TokenTTL         time.Duration
+	// GRPCPlaneAddr is the plaintext-gRPC (h2c) data-plane listen address,
+	// from LYREBIRD_GRPC_PORT. It is opt-in: empty means no gRPC listener is
+	// bound and Lyrebird behaves exactly as it does without the feature
+	// (constitution Principle V — a new surface only appears when explicitly
+	// configured). The gRPC data plane, like the HTTP data plane, is never
+	// authenticated (FR-011).
+	GRPCPlaneAddr   string
+	TrafficTTL      time.Duration
+	DefaultSpace    string
+	AllowProxyHosts []string
+	AuthKeys        []string
+	TokenTTL        time.Duration
 	// DataKeyB64 is the raw, still-encoded LYREBIRD_DATA_KEY value, if any.
 	// Decoding into an actual key is internal/infra/crypto's job.
 	DataKeyB64      string
@@ -61,6 +68,13 @@ func Load() (Config, error) {
 		DataKeyB64:       os.Getenv("LYREBIRD_DATA_KEY"),
 		DBPath:           getenv("LYREBIRD_DB_PATH", "/data/lyrebird.db"),
 		SeedDir:          getenv("LYREBIRD_SEED_DIR", "/config"),
+	}
+
+	// Opt-in: only set an address when a port is given, so an unset
+	// LYREBIRD_GRPC_PORT leaves GRPCPlaneAddr empty and bootstrap binds no
+	// gRPC listener at all.
+	if port := os.Getenv("LYREBIRD_GRPC_PORT"); port != "" {
+		cfg.GRPCPlaneAddr = ":" + port
 	}
 
 	var err error

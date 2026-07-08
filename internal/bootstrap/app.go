@@ -17,6 +17,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/brienze1/lyrebird/internal/adapters/grpcplane"
 	"github.com/brienze1/lyrebird/internal/adapters/httpadmin"
 	"github.com/brienze1/lyrebird/internal/adapters/httpmw"
 	"github.com/brienze1/lyrebird/internal/adapters/matcher"
@@ -50,6 +51,13 @@ type App struct {
 	controlListener net.Listener
 	dataServer      *http.Server
 	controlServer   *http.Server
+
+	// grpcListener/grpcServer are nil unless cfg.GRPCPlaneAddr is set
+	// (LYREBIRD_GRPC_PORT) — the plaintext-gRPC data plane is opt-in, so an
+	// unconfigured port leaves this whole surface absent and every other path
+	// provably unchanged (FR-010, constitution Principle V).
+	grpcListener net.Listener
+	grpcServer   *grpcplane.Server
 
 	// cancelServerCtx cancels the context threaded into proxy.NewHandler
 	// (which a FaultTimeout hang is bound to — see fault.go's serveFault
@@ -321,6 +329,32 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 		return nil, fmt.Errorf("bootstrap: listen control plane: %w", err)
 	}
 
+	// Opt-in plaintext-gRPC data plane. Bound only when configured; wired to
+	// the SAME match + record use cases as the HTTP data plane, and never
+	// authenticated (FR-011). A bind failure here tears down what we've
+	// already opened, exactly like the two listeners above.
+	var grpcSrv *grpcplane.Server
+	var grpcLn net.Listener
+	if cfg.GRPCPlaneAddr != "" {
+		grpcLn, err = lc.Listen(ctx, "tcp", cfg.GRPCPlaneAddr)
+		if err != nil {
+			cancelServerCtx()
+			_ = dataLn.Close()
+			_ = controlLn.Close()
+			c.gcLoop.Stop()
+			_ = c.store.Close()
+			return nil, fmt.Errorf("bootstrap: listen grpc plane: %w", err)
+		}
+		grpcSrv = grpcplane.New(grpcplane.Deps{
+			Match:        c.matchRequestUC,
+			Record:       c.recordTrafficUC,
+			DefaultSpace: cfg.DefaultSpace,
+			BodyCapBytes: cfg.BodyCapBytes,
+			Clock:        clock.System{},
+			Log:          log,
+		})
+	}
+
 	// The data plane is served by dataHandler directly, not via an
 	// http.ServeMux: ServeMux's pattern matching requires the request
 	// path to start with "/", but a CONNECT request's authority-form
@@ -346,6 +380,15 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 			log.Error("control-plane server error", "err", err)
 		}
 	}()
+	if grpcSrv != nil {
+		go func() {
+			// grpc.Server.Serve returns nil on GracefulStop; any other error
+			// is a genuine listener failure worth logging.
+			if err := grpcSrv.Serve(grpcLn); err != nil {
+				log.Error("grpc-plane server error", "err", err)
+			}
+		}()
+	}
 
 	// Every step that determines correctness (key, store, seeds) has
 	// succeeded — flip readiness now.
@@ -365,6 +408,8 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 		controlListener: controlLn,
 		dataServer:      dataSrv,
 		controlServer:   controlSrv,
+		grpcListener:    grpcLn,
+		grpcServer:      grpcSrv,
 		cancelServerCtx: cancelServerCtx,
 	}, nil
 }
@@ -392,6 +437,16 @@ func (a *App) ControlAddr() string { return a.controlListener.Addr().String() }
 
 // DataAddr returns the actual address the data-plane listener is bound to.
 func (a *App) DataAddr() string { return a.dataListener.Addr().String() }
+
+// GRPCAddr returns the actual address the gRPC data-plane listener is bound
+// to, or "" when the gRPC plane is not enabled — useful in tests that bind to
+// ":0" for an ephemeral port.
+func (a *App) GRPCAddr() string {
+	if a.grpcListener == nil {
+		return ""
+	}
+	return a.grpcListener.Addr().String()
+}
 
 // Shutdown stops the GC loop, then both HTTP servers, and closes the store.
 // Canceling cancelServerCtx first releases any in-flight FaultTimeout
@@ -434,6 +489,16 @@ func (a *App) Shutdown(ctx context.Context) error {
 		defer wg.Done()
 		dataErr = a.dataServer.Shutdown(shCtx)
 	}()
+	// The gRPC server (when configured) drains concurrently too. GracefulStop
+	// has no context/deadline of its own; it returns once in-flight calls
+	// finish, and its Serve goroutine closes grpcListener on the way out.
+	if a.grpcServer != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.grpcServer.GracefulStop()
+		}()
+	}
 	wg.Wait()
 
 	return errors.Join(controlErr, dataErr, a.Store.Close())
