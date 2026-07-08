@@ -55,6 +55,16 @@ Feature: Mock overrides
     When I send a POST request to "/order" on the data plane with host "example.local" and JSON body '{"tier":"basic"}'
     Then the recorded traffic for that request has decision "proxied"
 
+  Scenario: A body-JSONPath condition also accepts the documented "$." root-marker syntax
+    Given Lyrebird boots
+    And an upstream "example.local" configured in partition "default" pointing at a fake upstream
+    And a mock named "premium-dollar" matching POST path "/order-dollar" with body path "$.tier" equals "gold" that responds 200 with body "premium order"
+    When I send a POST request to "/order-dollar" on the data plane with host "example.local" and JSON body '{"tier":"gold"}'
+    Then the response status is 200
+    And the response body is "premium order"
+    When I send a POST request to "/order-dollar" on the data plane with host "example.local" and JSON body '{"tier":"basic"}'
+    Then the recorded traffic for that request has decision "proxied"
+
   Scenario: Validation expressed as an ordinary matching + response rule
     Given Lyrebird boots
     And an upstream "example.local" configured in partition "default" pointing at a fake upstream

@@ -7,6 +7,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -72,6 +74,21 @@ func (t *spyState) anUpstreamConfiguredInPartitionPointingAtTheFakeUpstream(ctx 
 	return t.s.app.Store.SetUpstream(ctx, domain.Upstream{
 		Partition: partition, MatchHost: matchHost, TargetURL: t.lastFakeUpstream.URL(),
 	})
+}
+
+// aSeedFileDeclaresAnUpstreamInPartitionPointingAtAFakeUpstream writes a seed
+// YAML fixture directly (rather than via Admin REST — seeded upstreams are
+// loaded from mounted config, never created at runtime), mirroring
+// steps_mock.go's aSeedFileDeclaresAMockNamedInPartitionMatchingPathThatRespondsWithBody
+// — so this step MUST run before "Lyrebird boots" in a scenario.
+func (t *spyState) aSeedFileDeclaresAnUpstreamInPartitionPointingAtAFakeUpstream(matchHost, partition string) error {
+	fu := t.newFakeUpstream()
+	fu.SetResponse(http.StatusOK, []byte("seeded-upstream-response"), nil)
+	content := fmt.Sprintf(
+		"space: %s\nupstreams:\n  - match_host: %s\n    target_url: %s\n",
+		partition, matchHost, fu.URL(),
+	)
+	return os.WriteFile(filepath.Join(t.s.seedDir, "seeded_upstream_seed.yaml"), []byte(content), 0o600)
 }
 
 func (t *spyState) anUpstreamConfiguredInPartitionPointingAtAClosedPort(ctx context.Context, matchHost, partition string) error {
@@ -306,6 +323,8 @@ func RegisterSpySteps(sc *godog.ScenarioContext, s *appState) {
 		})
 	sc.Step(`^an upstream "([^"]*)" configured in partition "([^"]*)" pointing at a closed port$`,
 		t.anUpstreamConfiguredInPartitionPointingAtAClosedPort)
+	sc.Step(`^a seed file declares an upstream "([^"]*)" in partition "([^"]*)" pointing at a fake upstream$`,
+		t.aSeedFileDeclaresAnUpstreamInPartitionPointingAtAFakeUpstream)
 
 	sc.Step(`^I send a GET request to "([^"]*)" on the data plane with host "([^"]*)"$`, t.iSendAGETRequestToOnTheDataPlaneWithHost)
 	sc.Step(`^I send a GET request to "([^"]*)" on the data plane with host "([^"]*)" in partition "([^"]*)"$`,

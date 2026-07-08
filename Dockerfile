@@ -26,7 +26,10 @@ RUN mkdir -p /image-data /image-config && chown -R 65532:65532 /image-data /imag
 # scratch — needed once outbound TLS proxying lands (M1+), so it's taken now
 # rather than reworked later.
 FROM gcr.io/distroless/static-debian12:nonroot AS final
+LABEL org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.source="https://github.com/brienze1/lyrebird"
 COPY --from=builder /out/lyrebird /lyrebird
+COPY LICENSE /LICENSE
 COPY --from=builder --chown=65532:65532 /image-data /data
 COPY --from=builder --chown=65532:65532 /image-config /config
 USER 65532:65532

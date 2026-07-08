@@ -13,9 +13,9 @@ contracts/admin-rest.md — the one route explicitly exempt from the auth gate) 
 `Authorization: Bearer` header on every subsequent request to `/mcp` too, including the initial
 `initialize` call. See tasks.md T056 for why an MCP-side equivalent isn't added.
 
-> **As of pass 12 of the ongoing refactor**: every tool in this document IS implemented and registered
-> exactly as documented (`list_examples`/`get_example` shipped in T058-T060) — confirmed against the
-> real `sdkmcp.AddTool` registrations in `internal/adapters/mcp/*.go`.
+> **As of Phase 12**: every tool in this document IS implemented and registered exactly as documented
+> (`list_examples`/`get_example` shipped in T058-T060; `export_config`/`import_config` shipped in
+> T061) — confirmed against the real `sdkmcp.AddTool` registrations in `internal/adapters/mcp/*.go`.
 
 ## Guide & scripting docs
 
@@ -58,6 +58,18 @@ contracts/admin-rest.md — the one route explicitly exempt from the auth gate) 
 | `create_space` | `{ id, description? }` | Partition. | FR-023 |
 | `list_spaces` | — | Partitions. | FR-023 |
 | `delete_space` | `{ id }` | Cascade result; refuses `default`. | FR-024 |
+
+## Import / export
+
+Ephemeral mocks + upstreams only for the given space — seeded mocks (mounted `/config`) are never
+included, since they already round-trip via the mounted seed file itself. Wire shape mirrors
+`contracts/seed-config.md` exactly (`space`, `upstreams[]`, `mocks[]`). REST twin:
+`GET /__lyrebird/export` / `POST /__lyrebird/import` (contracts/admin-rest.md).
+
+| Tool | Input | Output | Requirement |
+|------|-------|--------|-------------|
+| `export_config` | `{ space? }` | `{ yaml }` — a `contracts/seed-config.md`-shaped bundle. | tasks.md T061 |
+| `import_config` | `{ space?, yaml }` | `{ upstreams_imported, mocks_imported }` — additive, existing state untouched. | tasks.md T061 |
 
 ## MITM (forward-proxy mode)
 

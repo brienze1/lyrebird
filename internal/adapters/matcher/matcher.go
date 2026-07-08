@@ -10,8 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/tidwall/gjson"
-
+	"github.com/brienze1/lyrebird/internal/adapters/jsonpath"
 	"github.com/brienze1/lyrebird/internal/domain"
 	"github.com/brienze1/lyrebird/internal/usecase"
 )
@@ -130,7 +129,7 @@ func (e *Engine) Matches(m domain.Match, in usecase.MatchInput) (bool, []usecase
 		// condition near the tail of a very large body ever "mysteriously"
 		// misses: it may be peekBody's cap truncating the body mid-token,
 		// not a matcher bug.
-		result := gjson.GetBytes(in.Body, bm.Path)
+		result := jsonpath.GetBytes(in.Body, bm.Path)
 		actual, present := result.String(), result.Exists()
 		passed := evalMatcher(bm.Matcher, actual, present)
 		results = append(results, usecase.ConditionResult{Field: "body." + bm.Path, Expected: describeMatcher(bm.Matcher), Actual: actual, Passed: passed})

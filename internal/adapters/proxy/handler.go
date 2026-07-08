@@ -227,6 +227,7 @@ func (h *Handler) serveProxied(
 
 	rec := h.engine.Forward(w, r, upstream, h.bodyCapBytes, action, in)
 	reqStoredBody, reqTrunc, reqTotal := reqCapture.Result()
+	flushResponse(w)
 
 	h.recordTraffic(r.Context(), partition, r, start,
 		reqHeaders, reqStoredBody, reqTrunc, reqTotal, matchedMockID,
@@ -303,6 +304,7 @@ func (h *Handler) serveMocked(
 	}
 	w.WriteHeader(status)
 	_, _ = w.Write(respBody)
+	flushResponse(w)
 
 	respHeaders := make(map[string][]string, len(headers))
 	for k, v := range headers {
@@ -326,6 +328,9 @@ func (h *Handler) serveFaulted(
 	reqStoredBody, reqTrunc, reqTotal := reqCapture.Result()
 
 	status := serveFault(h.serverCtx, w, r, *mock.Action.Fault)
+	if status != 0 {
+		flushResponse(w)
+	}
 
 	mockID := mock.ID
 	h.recordTraffic(r.Context(), partition, r, start,
@@ -366,6 +371,7 @@ func (h *Handler) serveScriptFailedBody(
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusInternalServerError)
 	_, _ = w.Write(respBody)
+	flushResponse(w)
 
 	mid := mockID
 	h.recordTraffic(r.Context(), partition, r, start,
@@ -396,6 +402,7 @@ func (h *Handler) serveNotConfigured(
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNotFound)
 	_, _ = w.Write(respBody)
+	flushResponse(w)
 
 	h.recordTraffic(r.Context(), partition, r, start,
 		reqHeaders, reqStoredBody, reqTrunc, reqTotal, nil,
@@ -423,6 +430,7 @@ func (h *Handler) serveBlocked(
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
 	_, _ = w.Write(respBody)
+	flushResponse(w)
 
 	h.recordTraffic(r.Context(), partition, r, start,
 		reqHeaders, reqStoredBody, reqTrunc, reqTotal, nil,
@@ -452,11 +460,19 @@ func (h *Handler) serveInternalError(
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusInternalServerError)
 	_, _ = w.Write(respBody)
+	flushResponse(w)
 
 	h.recordTraffic(r.Context(), partition, r, start,
 		reqHeaders, reqStoredBody, reqTrunc, reqTotal, matchedMockID,
 		domain.DecisionInternalError, http.StatusInternalServerError,
 		map[string][]string{"Content-Type": {"application/json"}}, respBody, false, int64(len(respBody)))
+}
+
+// flushResponse flushes a written response to the client immediately, if the writer supports it.
+func flushResponse(w http.ResponseWriter) {
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func (h *Handler) recordTraffic(

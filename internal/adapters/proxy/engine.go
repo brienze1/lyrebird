@@ -85,15 +85,18 @@ type Engine struct {
 // take once headers have arrived.
 func NewEngine(upstreamTimeout time.Duration, script scriptRewriter, log *slog.Logger) *Engine {
 	dialer := &net.Dialer{Timeout: upstreamTimeout}
+	const maxIdleConnsPerUpstreamHost = 100
 	verify := &http.Transport{
 		DialContext:           dialer.DialContext,
 		ResponseHeaderTimeout: upstreamTimeout,
 		ForceAttemptHTTP2:     true,
+		MaxIdleConnsPerHost:   maxIdleConnsPerUpstreamHost,
 	}
 	skipVerify := &http.Transport{
 		DialContext:           dialer.DialContext,
 		ResponseHeaderTimeout: upstreamTimeout,
 		ForceAttemptHTTP2:     true,
+		MaxIdleConnsPerHost:   maxIdleConnsPerUpstreamHost,
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // operator opt-in per Upstream.TLSSkipVerify
 	}
 	if log == nil {

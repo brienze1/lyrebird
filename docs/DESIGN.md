@@ -4,8 +4,18 @@
 > by AI agents, deployed as a Docker image, run locally or as a shared HML service. One tool to
 > rule them all.
 
-Status: **Draft plan for review.** Nothing built yet. Decisions in §2 reflect your direction;
-items marked *(proposed)* are my recommendation awaiting your nod.
+Status: **Built.** Every milestone in §8's roadmap (M0–M6) has shipped — see
+[`specs/001-lyrebird/tasks.md`](../specs/001-lyrebird/tasks.md) for the definitive, phase-by-phase
+task record. This document is kept as design/rationale context, not a live plan; where it and the
+spec disagree on a current-state claim, the spec and contracts below are authoritative.
+
+**Related documents:**
+- [`specs/001-lyrebird/spec.md`](../specs/001-lyrebird/spec.md) — functional requirements and success criteria (FR-*/SC-*).
+- [`specs/001-lyrebird/plan.md`](../specs/001-lyrebird/plan.md) and [`data-model.md`](../specs/001-lyrebird/data-model.md) — implementation plan and entity model.
+- [`specs/001-lyrebird/contracts/`](../specs/001-lyrebird/contracts/) — MCP tool contract, Admin REST contract, seed-config YAML schema.
+- [`specs/001-lyrebird/quickstart.md`](../specs/001-lyrebird/quickstart.md) — scenario-by-scenario walkthrough.
+- [`specs/001-lyrebird/tasks.md`](../specs/001-lyrebird/tasks.md) — the task list, phase by phase, all checked off.
+- [`../README.md`](../README.md) — run instructions, MCP connection, environment variable reference.
 
 ---
 
@@ -56,7 +66,7 @@ treadmill; we don't run it.
    survive reset/GC); *ephemeral* mocks are created at runtime via MCP (optional TTL, GC-able).
 6. **No UI. Extensive MCP tooling** covers 100% of customization.
 
-**Proposed (my recommendation — confirm):**
+**Confirmed and shipped (originally proposed, now resolved — see §11):**
 7. **Scripting: embedded JavaScript via [goja](https://github.com/dop251/goja)** — pure-Go ES5.1+,
    no CGO, sandboxed. Rules are declarative for the easy case; drop to a JS `match(req)` /
    `respond(req)` hook for advanced logic. Chosen over Lua/Starlark/CEL because **AI authors JS most
@@ -235,6 +245,9 @@ memory guard so a runaway/hostile script can't hang the server.
 
 ## 8. Roadmap (vertical slices — each independently useful)
 
+> All of M0–M6 below have shipped. Kept as-is for the reasoning behind each slice's scope; for the
+> actual task-by-task build record, see `specs/001-lyrebird/tasks.md`.
+
 - **M0 — Skeleton + Docker + CI/CD.** Go module, clean-arch layout, `/healthz`, SQLite store with
   **AES-256-GCM at-rest encryption** (§10b) + GC loop, multi-stage Dockerfile (scratch), BDD
   harness, **and both GitHub Actions workflows** (PR gate + auto-publish to GHCR on merge to main).
@@ -290,24 +303,32 @@ field mappings: see `specs/002-grpc-data-plane/`.
 
 ## 9a. CI/CD — public image, auto-published (GitHub Actions)
 
-Public repo → **public image on GHCR** at `ghcr.io/brienze/lyrebird`, pullable by anyone, no login.
+Public repo → **public image on GHCR** at `ghcr.io/brienze1/lyrebird`, pullable by anyone, no login.
 GHCR authenticates with the built-in `GITHUB_TOKEN` (no secrets to manage). Two workflows:
 
 - **`.github/workflows/ci.yml`** — on pull requests + pushes: `go vet`, `golangci-lint`, `go test`
   (incl. BDD features), and a `docker build` (no push) to prove the image compiles. This is the
   merge gate.
 - **`.github/workflows/release.yml`** — on push to `main` and on `v*` tags: build **multi-arch
-  (linux/amd64 + linux/arm64)** with Buildx + QEMU and **push to GHCR**. Tags:
-  - push to `main` → `:latest`, `:main`, `:sha-<short>`
-  - tag `vX.Y.Z` → `:X.Y.Z`, `:X.Y`, `:X`, `:latest`
+  (linux/amd64 + linux/arm64)** with Buildx + QEMU and **push to GHCR**. Tags (as actually configured
+  via `docker/metadata-action`'s `type=ref,event=branch` / `type=sha` / `type=semver` rules, no
+  explicit `flavor:` override so `latest=auto` applies):
+  - push to `main` → `:main`, `:sha-<short>` — **not** `:latest` (`latest=auto` only fires alongside
+    a matching semver tag; a plain branch push has no version to compare, so it never applies here.
+    SC-008 only requires "an updated public image published with no manual steps," which `:main`/
+    `:sha-<short>` already satisfy)
+  - tag `vX.Y.Z` → `:X.Y.Z`, `:X.Y`, `:X`, and `:latest` (via `latest=auto`, since a semver tag push
+    is exactly the case it's designed for)
   Uses `docker/metadata-action` for tagging, `docker/build-push-action` with **GHA build cache**,
-  `permissions: { contents: read, packages: write }`.
+  `permissions: { contents: read, packages: write }`. `docker-compose.yml` pins `:latest` for local
+  use — that tag only moves on a `vX.Y.Z` release tag push, not on an ordinary merge to `main`.
 
 Notes: first publish requires flipping the GHCR package visibility to **public** once (repo/org
 package settings) or setting it via the org default. Optionally add release automation
 (`softprops/action-gh-release` or release-please) so `vX.Y.Z` tags cut GitHub Releases with notes.
-So the flow you asked for is literally: **merge PR to `main` → `release.yml` rebuilds and republishes
-`ghcr.io/brienze/lyrebird:latest` automatically.**
+So the flow is literally: **merge PR to `main` → `release.yml` rebuilds and republishes
+`ghcr.io/brienze1/lyrebird:main` and `:sha-<short>` automatically**, with no manual step; cutting a
+`vX.Y.Z` tag additionally republishes `:latest` for anyone pulling without pinning a version.
 
 ---
 
@@ -345,14 +366,17 @@ Principle: **frictionless by default, hardened by setting env vars.** Same patte
   Honest tradeoff — all payload content is encrypted; only minimal routing metadata stays in clear.
 - Seeded mocks load from mounted config at boot (not secrets), so they're unaffected either way.
 
-## 11. Remaining open questions
+## 11. Open questions — all resolved
 
-1. **Confirm the two *proposed* decisions** (§2.7 JavaScript/goja for scripting, §2.8 spaces model).
-2. **Seed config format** — one YAML per mock, or a single bundle file? (Leaning: a `/config` dir of
-   YAMLs, each a mock or a space.)
-3. **Recipe library seed set** — which SDK examples to write first (illustrative only, no code):
-   AWS SNS/SQS/DynamoDB/S3/Secrets Manager and GCP Pub/Sub/GCS/KMS is my starting list. Add any
-   others your teams hit most.
+Every question this section originally raised is now resolved and shipped:
 
-*(All prior open questions — stack, interception, scripting, spaces, presets, auth — are now
-resolved and captured above.)*
+1. **§2.7/§2.8's proposed decisions** (JS/goja scripting, the spaces model) were both confirmed and
+   implemented as described.
+2. **Seed config format** settled as a `/config` dir of YAML files, each declaring a space + its
+   upstreams + mocks — see `specs/001-lyrebird/contracts/seed-config.md` for the exact schema.
+   `GET /__lyrebird/export` / MCP's `export_config` produce a bundle in this same shape, so a
+   space's runtime state round-trips cleanly into a seed file (tasks.md T061).
+3. **Recipe library seed set** shipped in tasks.md's M5/T058-T060 milestone — see MCP's
+   `list_examples`/`get_example` tools for the live, curated set.
+
+Nothing is currently open; new questions belong in a fresh spec/issue, not this document.

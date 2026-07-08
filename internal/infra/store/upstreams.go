@@ -35,7 +35,7 @@ func (s *Store) SetUpstream(ctx context.Context, u domain.Upstream) error {
 // ListUpstreams returns every upstream configured in partition, ordered by
 // match_host for deterministic output.
 func (s *Store) ListUpstreams(ctx context.Context, partition string) ([]domain.Upstream, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.readDB.QueryContext(ctx,
 		`SELECT match_host, target_url, tls_skip_verify FROM upstreams WHERE "partition" = ? ORDER BY match_host`,
 		partition,
 	)

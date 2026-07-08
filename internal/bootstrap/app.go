@@ -96,6 +96,8 @@ type core struct {
 	createSpaceUC    *usecase.CreateSpace
 	listSpacesUC     *usecase.ListSpaces
 	deleteSpaceUC    *usecase.DeleteSpace
+	exportSeedsUC    *usecase.ExportSeeds
+	importSeedsUC    *usecase.ImportSeeds
 	templater        usecase.Templater
 	scriptEngine     *scripting.Engine
 
@@ -153,7 +155,7 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 	gcLoop.Start(ctx)
 
 	setUpstreamUC := usecase.NewSetUpstream(st)
-	listUpstreamsUC := usecase.NewListUpstreams(st)
+	listUpstreamsUC := usecase.NewListUpstreams(st, sd)
 	recordTrafficUC := usecase.NewRecordTraffic(st, clock.System{}, idgen.UUID{})
 	listTrafficUC := usecase.NewListTraffic(st)
 	getTrafficUC := usecase.NewGetTraffic(st)
@@ -170,6 +172,8 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 	createSpaceUC := usecase.NewCreateSpace(st, clock.System{})
 	listSpacesUC := usecase.NewListSpaces(st)
 	deleteSpaceUC := usecase.NewDeleteSpace(st)
+	exportSeedsUC := usecase.NewExportSeeds(listUpstreamsUC, mockCRUDUC)
+	importSeedsUC := usecase.NewImportSeeds(setUpstreamUC, mockCRUDUC)
 
 	// The default space is always implicitly active (every request/mock/
 	// upstream falls back to it) and can never be deleted, so it's
@@ -217,6 +221,8 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 		CreateSpace:    createSpaceUC,
 		ListSpaces:     listSpacesUC,
 		DeleteSpace:    deleteSpaceUC,
+		ExportSeeds:    exportSeedsUC,
+		ImportSeeds:    importSeedsUC,
 		GetMITMCACert:  getMITMCACertUC,
 	})
 
@@ -227,6 +233,7 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 		clearTrafficUC: clearTrafficUC, matchRequestUC: matchRequestUC, matchTestUC: matchTestUC,
 		mockCRUDUC: mockCRUDUC, resetUC: resetUC, metricsUC: metricsUC, promoteTrafficUC: promoteTrafficUC,
 		createSpaceUC: createSpaceUC, listSpacesUC: listSpacesUC, deleteSpaceUC: deleteSpaceUC,
+		exportSeedsUC: exportSeedsUC, importSeedsUC: importSeedsUC,
 		templater: templater, scriptEngine: scriptEngine,
 		mitmCA: mitmCA, getMITMCACertUC: getMITMCACertUC,
 		authIssuer: authIssuer, issueTokenUC: issueTokenUC,
@@ -273,6 +280,8 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	}
 	controlMux.HandleFunc("GET /__lyrebird/examples", httpadmin.ListExamples)
 	controlMux.HandleFunc("GET /__lyrebird/examples/{id}", httpadmin.GetExample)
+	controlMux.HandleFunc("GET /__lyrebird/export", httpadmin.ExportConfig(c.exportSeedsUC))
+	controlMux.HandleFunc("POST /__lyrebird/import", httpadmin.ImportConfig(c.importSeedsUC))
 	controlMux.Handle("/mcp", mcp.Handler(c.mcpServer))
 
 	// serverCtx (not the raw ctx Run was called with) is what a FaultTimeout
