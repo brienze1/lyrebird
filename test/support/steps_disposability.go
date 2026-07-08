@@ -40,6 +40,7 @@ type appState struct {
 	gcInterval      time.Duration
 	trafficTTL      time.Duration
 	allowProxyHosts []string
+	grpcEnabled     bool
 	mitmEnabled     bool
 	mitmCACertFile  string
 	mitmCAKeyFile   string
@@ -170,9 +171,18 @@ func (s *appState) bootWithDataKey(ctx context.Context, dataKeyB64 string) error
 		tokenTTL = time.Hour
 	}
 
+	// Only bind the gRPC data plane when a scenario explicitly enabled it, so
+	// the vast majority of scenarios boot exactly as before (ephemeral
+	// "127.0.0.1:0" port when on).
+	grpcAddr := ""
+	if s.grpcEnabled {
+		grpcAddr = "127.0.0.1:0"
+	}
+
 	cfg := config.Config{
 		DataPlaneAddr:    "127.0.0.1:0",
 		ControlPlaneAddr: "127.0.0.1:0",
+		GRPCPlaneAddr:    grpcAddr,
 		DefaultSpace:     "default",
 		TrafficTTL:       trafficTTL,
 		TokenTTL:         tokenTTL,

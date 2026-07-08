@@ -33,9 +33,10 @@ func run() int {
 	defer stop()
 
 	if cfg.MCPStdio {
-		if os.Getenv("LYREBIRD_DATA_PORT") != "" || os.Getenv("LYREBIRD_CONTROL_PORT") != "" {
-			log.Warn("LYREBIRD_DATA_PORT/LYREBIRD_CONTROL_PORT are ignored in stdio mode " +
-				"(LYREBIRD_MCP_STDIO=true) — no HTTP listeners are started")
+		if os.Getenv("LYREBIRD_DATA_PORT") != "" || os.Getenv("LYREBIRD_CONTROL_PORT") != "" ||
+			os.Getenv("LYREBIRD_GRPC_PORT") != "" {
+			log.Warn("LYREBIRD_DATA_PORT/LYREBIRD_CONTROL_PORT/LYREBIRD_GRPC_PORT are ignored in stdio mode " +
+				"(LYREBIRD_MCP_STDIO=true) — no network listeners are started")
 		}
 		if err := bootstrap.RunStdio(ctx, cfg, log); err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

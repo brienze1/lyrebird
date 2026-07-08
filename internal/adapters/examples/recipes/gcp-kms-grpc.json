@@ -1,0 +1,19 @@
+{
+  "id": "gcp-kms-grpc",
+  "title": "GCP Cloud KMS Decrypt echo (gRPC, plaintext)",
+  "provider": "gcp",
+  "service": "kms",
+  "description": "Mocks google.cloud.kms.v1.KeyManagementService/Decrypt over plaintext gRPC on Lyrebird's gRPC data plane (LYREBIRD_GRPC_PORT). Point the official KMS client at Lyrebird with option.WithEndpoint(\"host:port\") (no scheme), option.WithoutAuthentication(), and grpc.WithTransportCredentials(insecure.NewCredentials()). Decrypt echoes the request ciphertext (field 2) back as the plaintext (response field 1) so base64-of-plaintext stubs round-trip; plaintext_crc32c (field 2) echoes the request's ciphertext_crc32c (field 5) when present, and protection_level=SOFTWARE(1) + used_primary=true are returned for realism. The respond body is a Lyrebird gRPC response field-spec (fN -> value/copyFrom), not raw JSON.",
+  "mock": {
+    "name": "gcp-kms-decrypt-echo",
+    "match": {
+      "method": "POST",
+      "path": "/google.cloud.kms.v1.KeyManagementService/Decrypt"
+    },
+    "action": {
+      "respond": {
+        "body": "{\"f1\":{\"copyFrom\":2},\"f2\":{\"copyFrom\":5},\"f3\":{\"bool\":true},\"f4\":{\"int\":1}}"
+      }
+    }
+  }
+}

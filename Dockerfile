@@ -30,5 +30,8 @@ COPY --from=builder /out/lyrebird /lyrebird
 COPY --from=builder --chown=65532:65532 /image-data /data
 COPY --from=builder --chown=65532:65532 /image-config /config
 USER 65532:65532
-EXPOSE 8080 9090
+# 8080 data plane, 9090 control plane, 50051 optional plaintext-gRPC data
+# plane (only actually served when LYREBIRD_GRPC_PORT is set — EXPOSE is
+# documentation/port-mapping metadata and binds nothing on its own).
+EXPOSE 8080 9090 50051
 ENTRYPOINT ["/lyrebird"]

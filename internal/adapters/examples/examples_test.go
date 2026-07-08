@@ -9,8 +9,8 @@ import (
 
 func TestList_ReturnsEveryRecipeWithNoQuery(t *testing.T) {
 	got := List("")
-	if len(got) != 9 {
-		t.Fatalf("List(\"\") returned %d entries, want 9", len(got))
+	if len(got) != 11 {
+		t.Fatalf("List(\"\") returned %d entries, want 11", len(got))
 	}
 }
 
