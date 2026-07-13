@@ -19,6 +19,15 @@ space: payments-team            # optional; default "default"
 upstreams:
   - match_host: "api.stripe.com"
     target_url: "https://api.stripe.com"
+  # Optional match_path narrows an upstream to matching request paths, so two
+  # upstreams can share one host and route to different targets by path. Empty
+  # = any path; a leading "~" is a regexp, otherwise a plain path prefix.
+  - match_host: "graph-proxy.internal"
+    match_path: "/graph-fb"
+    target_url: "https://graph.facebook.com"
+  - match_host: "graph-proxy.internal"
+    match_path: "/graph-ig"
+    target_url: "https://graph.instagram.com"
 mocks:
   - name: charge-declined
     lifetime: seeded            # implied for config mocks; explicit for clarity

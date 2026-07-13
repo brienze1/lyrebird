@@ -35,6 +35,7 @@ type file struct {
 
 type fileUpstream struct {
 	MatchHost string `yaml:"match_host"`
+	MatchPath string `yaml:"match_path"`
 	TargetURL string `yaml:"target_url"`
 }
 
@@ -248,6 +249,7 @@ func Load(dir string, script scriptValidator) (Seeds, error) {
 			out.Upstreams = append(out.Upstreams, domain.Upstream{
 				Partition: space,
 				MatchHost: u.MatchHost,
+				MatchPath: u.MatchPath,
 				TargetURL: u.TargetURL,
 			})
 		}

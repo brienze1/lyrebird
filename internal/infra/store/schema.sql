@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS upstreams (
     id              TEXT PRIMARY KEY,
     "partition"     TEXT NOT NULL,
     match_host      TEXT NOT NULL,
+    match_path      TEXT NOT NULL DEFAULT '',
     target_url      TEXT NOT NULL,
     tls_skip_verify INTEGER NOT NULL DEFAULT 0
 );

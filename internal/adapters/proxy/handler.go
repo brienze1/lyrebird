@@ -218,7 +218,7 @@ func (h *Handler) serveProxied(
 		}
 
 		var found bool
-		upstream, found = ResolveUpstream(upstreams, r.Host)
+		upstream, found = ResolveUpstream(upstreams, r.Host, r.URL.Path)
 		if !found {
 			h.serveNotConfigured(w, r, partition, start, reqHeaders, reqBody, reqCapture)
 			return

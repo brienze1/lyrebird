@@ -12,6 +12,7 @@ import (
 type SetUpstreamIn struct {
 	Space         string `json:"space,omitempty" jsonschema:"space/partition to configure; defaults to the server's default space"`
 	MatchHost     string `json:"match_host" jsonschema:"host this upstream applies to, e.g. api.example.com"`
+	MatchPath     string `json:"match_path,omitempty" jsonschema:"optional path this upstream applies to; a ~ prefix is a regexp, otherwise a plain path prefix; empty means any path"`
 	TargetURL     string `json:"target_url" jsonschema:"absolute http(s) URL spy passthrough forwards unmatched requests to"`
 	TLSSkipVerify bool   `json:"tls_skip_verify,omitempty" jsonschema:"skip TLS certificate verification when forwarding to target_url"`
 }
@@ -33,7 +34,7 @@ func registerUpstreamTools(s *sdkmcp.Server, deps Deps) {
 			`Example: {"match_host":"api.example.com","target_url":"https://api.example.com"}`,
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in SetUpstreamIn) (*sdkmcp.CallToolResult, dto.UpstreamDTO, error) {
 		partition := resolveSpace(in.Space, deps.DefaultSpace)
-		d := dto.NewUpstreamDTOFromFields(in.MatchHost, in.TargetURL, in.TLSSkipVerify)
+		d := dto.NewUpstreamDTOFromFields(in.MatchHost, in.MatchPath, in.TargetURL, in.TLSSkipVerify)
 		if err := deps.SetUpstream.Execute(ctx, dto.UpstreamFromDTO(partition, d)); err != nil {
 			return nil, dto.UpstreamDTO{}, explainErr(err)
 		}
