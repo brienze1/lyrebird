@@ -3,17 +3,22 @@ package proxy
 import (
 	"net"
 	"path"
+	"regexp"
 	"strings"
 
 	"github.com/brienze1/lyrebird/internal/domain"
 )
 
-// ResolveUpstream finds the best-matching Upstream for requestHost among
-// upstreams (already filtered to one partition by the caller). MatchHost is
-// glob syntax (data-model.md), matched via stdlib path.Match — "." isn't a
-// path.Match separator, so "*.example.com" naturally matches
-// "a.b.example.com" and a literal pattern degrades to an exact match.
-func ResolveUpstream(upstreams []domain.Upstream, requestHost string) (domain.Upstream, bool) {
+// ResolveUpstream finds the best-matching Upstream for (requestHost,
+// requestPath) among upstreams (already filtered to one partition by the
+// caller). MatchHost is glob syntax (data-model.md), matched via stdlib
+// path.Match — "." isn't a path.Match separator, so "*.example.com" naturally
+// matches "a.b.example.com" and a literal pattern degrades to an exact match.
+// MatchPath, when non-empty, additionally requires the request path to match
+// (see matchUpstreamPath): a "~"-prefixed regexp, otherwise a plain prefix.
+// This lets two upstreams share one host and route to different real targets
+// by path. A path-scoped upstream beats a host-only one on a tie.
+func ResolveUpstream(upstreams []domain.Upstream, requestHost, requestPath string) (domain.Upstream, bool) {
 	host := strings.ToLower(hostOnly(requestHost))
 
 	var best domain.Upstream
@@ -23,11 +28,47 @@ func ResolveUpstream(upstreams []domain.Upstream, requestHost string) (domain.Up
 		if err != nil || !ok {
 			continue
 		}
-		if !found || moreSpecific(u.MatchHost, best.MatchHost) {
+		if !matchUpstreamPath(u.MatchPath, requestPath) {
+			continue
+		}
+		if !found || moreSpecificUpstream(u, best) {
 			best, found = u, true
 		}
 	}
 	return best, found
+}
+
+// matchUpstreamPath reports whether requestPath satisfies an upstream's
+// MatchPath. An empty pattern matches any path (host-only upstream). A "~"
+// prefix selects a regexp matched against the raw path (a bad regexp never
+// matches); otherwise the pattern is a plain path prefix.
+func matchUpstreamPath(pattern, requestPath string) bool {
+	if pattern == "" {
+		return true
+	}
+	if rx, isRegex := strings.CutPrefix(pattern, "~"); isRegex {
+		re, err := regexp.Compile(rx)
+		if err != nil {
+			return false
+		}
+		return re.MatchString(requestPath)
+	}
+	return strings.HasPrefix(requestPath, pattern)
+}
+
+// moreSpecificUpstream is the tie-break when two upstreams both match: a
+// path-scoped upstream beats a host-only one; between two path-scoped ones the
+// longer path prefix wins; otherwise fall back to host specificity.
+func moreSpecificUpstream(candidate, current domain.Upstream) bool {
+	candHasPath := candidate.MatchPath != ""
+	curHasPath := current.MatchPath != ""
+	if candHasPath != curHasPath {
+		return candHasPath
+	}
+	if candHasPath && len(candidate.MatchPath) != len(current.MatchPath) {
+		return len(candidate.MatchPath) > len(current.MatchPath)
+	}
+	return moreSpecific(candidate.MatchHost, current.MatchHost)
 }
 
 // HostAllowed reports whether requestHost may be proxied under the
