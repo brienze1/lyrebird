@@ -21,7 +21,10 @@ upstreams:
     target_url: "https://api.stripe.com"
   # Optional match_path narrows an upstream to matching request paths, so two
   # upstreams can share one host and route to different targets by path. Empty
-  # = any path; a leading "~" is a regexp, otherwise a plain path prefix.
+  # = any path; a leading "~" is a regexp (match-only), otherwise a plain path
+  # prefix that is STRIPPED from the forwarded path (nginx "location"
+  # semantics): match_path "/graph-fb" + target graph.facebook.com forwards
+  # "/graph-fb/v23.0/x" as "/v23.0/x".
   - match_host: "graph-proxy.internal"
     match_path: "/graph-fb"
     target_url: "https://graph.facebook.com"
