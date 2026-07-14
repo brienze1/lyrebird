@@ -147,6 +147,14 @@ func (h *Handler) serveOne(w http.ResponseWriter, r *http.Request, partition str
 	r.Body = reqBody
 	reqHeaders := map[string][]string(r.Header.Clone())
 
+	// Ingress route-prefix strip (before mock-match + upstream resolution): a
+	// prefix-style upstream MatchPath (e.g. /coreai, /graph-fb) is stripped
+	// here so mocks and the forwarded request both see the clean path, and the
+	// resolved upstream is stashed for serveProxied. No-op when nothing routes.
+	if ups, err := h.upstreams.Execute(r.Context(), partition); err == nil {
+		r = applyIngressRoute(r, ups)
+	}
+
 	in := usecase.MatchInput{
 		Method: r.Method, Path: r.URL.Path,
 		Header: map[string][]string(r.Header), Query: map[string][]string(r.URL.Query()),
@@ -207,6 +215,15 @@ func (h *Handler) serveProxied(
 	var upstream domain.Upstream
 	if forwardTo != nil {
 		upstream = domain.Upstream{TargetURL: forwardTo.Scheme + "://" + forwardTo.Host}
+	} else if routed, ok := routedUpstream(r.Context()); ok {
+		// An ingress route-prefix already resolved the upstream and stripped
+		// the path. An empty TargetURL is a strip-only route (no passthrough) —
+		// an unmatched request answers not_configured (404).
+		if routed.TargetURL == "" {
+			h.serveNotConfigured(w, r, partition, start, reqHeaders, reqBody, reqCapture)
+			return
+		}
+		upstream = routed
 	} else {
 		upstreams, err := h.upstreams.Execute(r.Context(), partition)
 		if err != nil {
