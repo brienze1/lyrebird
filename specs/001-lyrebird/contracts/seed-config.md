@@ -19,18 +19,29 @@ space: payments-team            # optional; default "default"
 upstreams:
   - match_host: "api.stripe.com"
     target_url: "https://api.stripe.com"
-  # Optional match_path narrows an upstream to matching request paths, so two
-  # upstreams can share one host and route to different targets by path. Empty
-  # = any path; a leading "~" is a regexp (match-only), otherwise a plain path
-  # prefix that is STRIPPED from the forwarded path (nginx "location"
-  # semantics): match_path "/graph-fb" + target graph.facebook.com forwards
-  # "/graph-fb/v23.0/x" as "/v23.0/x".
+  # Optional match_path narrows an upstream to matching request paths, so one
+  # host can front several providers by path. Empty = any path (host-only); a
+  # leading "~" is a regexp (match-only); otherwise a plain path PREFIX that is
+  # a "route prefix" — it is stripped at INGRESS, before mock-matching and
+  # upstream resolution, so both the mocks AND the forwarded request see the
+  # clean path. i.e. one route prefix per provider, everything behind it is
+  # that provider's (mock or passthrough): match_path "/graph-fb" + target
+  # graph.facebook.com turns "/graph-fb/v23.0/x" into a mock lookup for
+  # "/v23.0/x" and, if unmatched, a passthrough to graph.facebook.com/v23.0/x.
+  #
+  # A prefix route with an EMPTY target_url is strip-only: the prefix is still
+  # stripped (so mocks match clean paths) but there is no passthrough — an
+  # unmatched request answers not_configured (404). Use this for a fully-mocked
+  # provider that has no real backend to fall through to.
   - match_host: "graph-proxy.internal"
     match_path: "/graph-fb"
     target_url: "https://graph.facebook.com"
   - match_host: "graph-proxy.internal"
     match_path: "/graph-ig"
     target_url: "https://graph.instagram.com"
+  - match_host: "graph-proxy.internal"
+    match_path: "/mocked-only"    # strip-only: mocks match clean paths, unmatched -> 404
+    target_url: ""
 mocks:
   - name: charge-declined
     lifetime: seeded            # implied for config mocks; explicit for clarity

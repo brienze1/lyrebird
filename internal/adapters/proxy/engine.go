@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/brienze1/lyrebird/internal/domain"
@@ -160,7 +159,6 @@ func (e *Engine) rewrite(pr *httputil.ProxyRequest) {
 		target = &url.URL{Scheme: "http", Host: "lyrebird-invalid-upstream.invalid"}
 	}
 	pr.SetURL(target)
-	stripUpstreamPathPrefix(pr, st.upstream.MatchPath)
 
 	if st.action == nil {
 		return
@@ -182,25 +180,6 @@ func (e *Engine) rewrite(pr *httputil.ProxyRequest) {
 		return
 	}
 	applyRewrite(pr.Out, rw)
-}
-
-// stripUpstreamPathPrefix removes a prefix-style MatchPath from the forwarded
-// path. A prefix MatchPath is a routing selector (like an nginx "location"),
-// not part of the real upstream path, so it must not reach the target — e.g.
-// with MatchPath "/graph-fb" and target https://graph.facebook.com, an inbound
-// "/graph-fb/v23.0/debug_token" forwards as "/v23.0/debug_token". A regexp
-// MatchPath ("~") is match-only, so nothing is stripped. The forwarded path
-// always keeps a leading "/".
-func stripUpstreamPathPrefix(pr *httputil.ProxyRequest, matchPath string) {
-	if matchPath == "" || strings.HasPrefix(matchPath, "~") {
-		return
-	}
-	trimmed := strings.TrimPrefix(pr.Out.URL.Path, matchPath)
-	if !strings.HasPrefix(trimmed, "/") {
-		trimmed = "/" + trimmed
-	}
-	pr.Out.URL.Path = trimmed
-	pr.Out.URL.RawPath = ""
 }
 
 func (e *Engine) modifyResponse(resp *http.Response) error {
