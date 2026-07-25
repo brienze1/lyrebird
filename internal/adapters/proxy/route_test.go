@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"net/http/httptest"
 	"testing"
 
@@ -18,7 +19,7 @@ func ingressUpstreams() []domain.Upstream {
 }
 
 func TestApplyIngressRouteStripsPrefixAndStashes(t *testing.T) {
-	r := httptest.NewRequest("GET", "http://creatorads-lyrebird/coreai/request_anticipation", nil)
+	r := httptest.NewRequestWithContext(context.Background(), "GET", "http://creatorads-lyrebird/coreai/request_anticipation", nil)
 	r = applyIngressRoute(r, ingressUpstreams())
 	if r.URL.Path != "/request_anticipation" {
 		t.Fatalf("path = %q, want /request_anticipation", r.URL.Path)
@@ -30,7 +31,7 @@ func TestApplyIngressRouteStripsPrefixAndStashes(t *testing.T) {
 }
 
 func TestApplyIngressRouteStripOnlyRouteHasEmptyTarget(t *testing.T) {
-	r := httptest.NewRequest("GET", "http://creatorads-lyrebird/antecipame/api/v1/pix/transfers", nil)
+	r := httptest.NewRequestWithContext(context.Background(), "GET", "http://creatorads-lyrebird/antecipame/api/v1/pix/transfers", nil)
 	r = applyIngressRoute(r, ingressUpstreams())
 	if r.URL.Path != "/api/v1/pix/transfers" {
 		t.Fatalf("path = %q, want /api/v1/pix/transfers", r.URL.Path)
@@ -42,7 +43,7 @@ func TestApplyIngressRouteStripOnlyRouteHasEmptyTarget(t *testing.T) {
 }
 
 func TestApplyIngressRouteHostOnlyDoesNotStripOrStash(t *testing.T) {
-	r := httptest.NewRequest("GET", "http://plain-host/whatever", nil)
+	r := httptest.NewRequestWithContext(context.Background(), "GET", "http://plain-host/whatever", nil)
 	r = applyIngressRoute(r, ingressUpstreams())
 	if r.URL.Path != "/whatever" {
 		t.Fatalf("path = %q, want unchanged /whatever", r.URL.Path)
@@ -53,7 +54,7 @@ func TestApplyIngressRouteHostOnlyDoesNotStripOrStash(t *testing.T) {
 }
 
 func TestApplyIngressRouteRegexIsMatchOnlyNoStrip(t *testing.T) {
-	r := httptest.NewRequest("GET", "http://creatorads-lyrebird/rx/thing", nil)
+	r := httptest.NewRequestWithContext(context.Background(), "GET", "http://creatorads-lyrebird/rx/thing", nil)
 	r = applyIngressRoute(r, ingressUpstreams())
 	if r.URL.Path != "/rx/thing" {
 		t.Fatalf("path = %q, want unchanged /rx/thing (regex match_path is match-only)", r.URL.Path)
@@ -64,7 +65,7 @@ func TestApplyIngressRouteRegexIsMatchOnlyNoStrip(t *testing.T) {
 }
 
 func TestApplyIngressRouteNoMatchLeavesRequestUnchanged(t *testing.T) {
-	r := httptest.NewRequest("GET", "http://creatorads-lyrebird/unrouted/x", nil)
+	r := httptest.NewRequestWithContext(context.Background(), "GET", "http://creatorads-lyrebird/unrouted/x", nil)
 	r = applyIngressRoute(r, ingressUpstreams())
 	if r.URL.Path != "/unrouted/x" {
 		t.Fatalf("path = %q, want unchanged", r.URL.Path)
