@@ -26,10 +26,17 @@ func (f fakeUpstreamLister) Execute(_ context.Context, _ string) ([]domain.Upstr
 	return f.upstreams, f.err
 }
 
-type fakeTrafficRecorder struct{ recorded []usecase.RecordTrafficInput }
+type fakeTrafficRecorder struct {
+	recorded []usecase.RecordTrafficInput
+	// ctxErrs captures ctx.Err() at each Execute call, so a test can assert
+	// recordTraffic hands the store a live (non-canceled) context even when
+	// the originating request context is already done.
+	ctxErrs []error
+}
 
-func (f *fakeTrafficRecorder) Execute(_ context.Context, in usecase.RecordTrafficInput) (domain.TrafficRecord, error) {
+func (f *fakeTrafficRecorder) Execute(ctx context.Context, in usecase.RecordTrafficInput) (domain.TrafficRecord, error) {
 	f.recorded = append(f.recorded, in)
+	f.ctxErrs = append(f.ctxErrs, ctx.Err())
 	return domain.TrafficRecord{}, nil
 }
 
@@ -207,6 +214,47 @@ func TestServeMockedServesScenarioResponseWhenNotExhausted(t *testing.T) {
 
 	if w.Code != http.StatusOK || w.Body.String() != "one" {
 		t.Fatalf("status/body = %d/%q, want 200/%q", w.Code, w.Body.String(), "one")
+	}
+}
+
+// TestRecordTrafficSurvivesCanceledRequestContext is the regression test for a
+// real load-induced flake: recordTraffic runs AFTER the response has been
+// written, and the store's writer is a single serialized SQLite connection, so
+// under load the append queues behind the response and races the originating
+// request context's cancellation (client got its response and disconnected /
+// the handler returned). When it loses that race the write fails with
+// "append traffic: context canceled" and the traffic record is silently
+// dropped — invisible in the traffic journal that callers (and tests) read
+// back. recordTraffic must detach from the request context so an
+// already-canceled request still records its traffic.
+func TestRecordTrafficSurvivesCanceledRequestContext(t *testing.T) {
+	rec := &fakeTrafficRecorder{}
+	h := newTestHandler(rec, fakeScenarioAdvancer{idx: 0})
+
+	// A plain respond mock: serveMocked writes the response, then records.
+	mock := domain.Mock{
+		ID:     "m",
+		Action: domain.Action{Kind: domain.ActionRespond, Respond: &domain.RespondAction{Status: 200, Body: []byte("ok")}},
+	}
+
+	// The request context is already canceled by the time we record — the
+	// worst-case version of the production race, where the append runs after
+	// the client has gone.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "http://example.local/m", nil)
+	req.Host = "example.local"
+	w := httptest.NewRecorder()
+
+	reqBody, reqCapture := newCappedTee(req.Body, 1<<20)
+	in := usecase.MatchInput{Method: req.Method, Path: req.URL.Path}
+	h.serveMocked(w, req, "default", time.Now(), map[string][]string{}, reqBody, reqCapture, mock, in, nil)
+
+	if len(rec.recorded) != 1 {
+		t.Fatalf("recorded %d traffic entries, want 1 — a canceled request context must not drop the record", len(rec.recorded))
+	}
+	if rec.ctxErrs[0] != nil {
+		t.Fatalf("recordTraffic handed the store a canceled context (ctx.Err() = %v); it must detach from the request context so the post-response append cannot be canceled under load", rec.ctxErrs[0])
 	}
 }
 
