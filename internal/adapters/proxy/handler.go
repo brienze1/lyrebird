@@ -497,6 +497,20 @@ func (h *Handler) recordTraffic(
 	reqHeaders map[string][]string, reqBody []byte, reqTrunc bool, reqTotal int64, matchedMockID *string,
 	decision domain.Decision, status int, respHeaders map[string][]string, respBody []byte, respTrunc bool, respTotal int64,
 ) {
+	// Detach from the request context before the store write. Every caller
+	// passes r.Context() and calls this AFTER the response has been written,
+	// so by the time the append runs the request context may already be
+	// canceled (client got its response and disconnected, or the upstream/
+	// data-plane handler returned). The store's writer is a single serialized
+	// SQLite connection, so under load the append queues behind the response
+	// and loses the race against that cancellation — surfacing as
+	// "append traffic: context canceled" and silently dropping the record.
+	// The recorded partition/payload are all passed explicitly, so no
+	// request-scoped values are needed; keep them but drop the cancellation,
+	// and still bound the write so a stuck store can't leak the goroutine.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
 	_, err := h.record.Execute(ctx, usecase.RecordTrafficInput{
 		Partition: partition, Method: r.Method, Host: r.Host, Path: r.URL.Path,
 		RequestHeaders: reqHeaders, RequestBody: reqBody, RequestBodyTruncated: reqTrunc, RequestBodyTotalSize: reqTotal,
