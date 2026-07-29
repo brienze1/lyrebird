@@ -35,4 +35,14 @@ the token endpoint and health require `Authorization: Bearer` (FR-031).
 | `POST /__lyrebird/auth/token` | `{ client_key }` | issue JWT (auth-enabled only; exempt from the auth gate itself) | FR-031 |
 | `GET /__lyrebird/healthz` `GET /__lyrebird/readyz` | — | liveness/readiness (never authed) | FR-034 |
 
+`GET /__lyrebird/traffic/{id}` (and its `get_traffic` twin) return each recorded
+message as `{ headers, body, json?, body_truncated, body_total_size }`. `body` is
+the bytes, base64-encoded. `json` is those same bytes already parsed, present
+only when the body is valid JSON — so a consumer verifying what a service
+actually sent upstream can address `request.json.<path>` directly instead of
+base64-decoding first. It carries the sender's bytes verbatim rather than a
+re-marshalled value, so numeric literals are preserved exactly (`0.011` stays
+`0.011`); truncated bodies are not valid JSON and are therefore omitted rather
+than half-parsed.
+
 Ports: data-plane proxy listener(s) separate from the control-plane listener (MCP HTTP + this REST).

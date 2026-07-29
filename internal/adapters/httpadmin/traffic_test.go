@@ -139,6 +139,83 @@ func TestGetTrafficReturnsDecodedDetail(t *testing.T) {
 	}
 }
 
+// A recorded JSON body must be addressable as a JSON path by whoever reads the
+// spy — asserting "what did the service actually send upstream?" is the point of
+// recording it, and base64 makes that impossible without a decode step.
+func TestGetTrafficExposesRecordedJSONBodyAsJSON(t *testing.T) {
+	sent := []byte(`{"pix_key_type":"document","offer":{"rate":0.011,"advance_initial_date":"2026-08-28"}}`)
+	reqMsg, err := usecase.EncodeRecordedMessage(usecase.RecordedMessage{Body: sent})
+	if err != nil {
+		t.Fatalf("EncodeRecordedMessage(req): %v", err)
+	}
+	respMsg, err := usecase.EncodeRecordedMessage(usecase.RecordedMessage{Body: []byte(`{"contract_anticipation_request_id":"coreai-1"}`)})
+	if err != nil {
+		t.Fatalf("EncodeRecordedMessage(resp): %v", err)
+	}
+	uc := &fakeGetTrafficUseCase{record: domain.TrafficRecord{
+		ID: "t1", Method: "POST", Host: "creatorads-lyrebird", Path: "/request_anticipation",
+		Status: 200, Request: reqMsg, Response: respMsg,
+	}}
+	rr := httptest.NewRecorder()
+	GetTraffic(uc)(rr, newGetRequest(t, "/__lyrebird/traffic/t1"))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	var out struct {
+		Request struct {
+			JSON struct {
+				PixKeyType string `json:"pix_key_type"`
+				Offer      struct {
+					Rate               json.Number `json:"rate"`
+					AdvanceInitialDate string      `json:"advance_initial_date"`
+				} `json:"offer"`
+			} `json:"json"`
+		} `json:"request"`
+		Response struct {
+			JSON struct {
+				ContractID string `json:"contract_anticipation_request_id"`
+			} `json:"json"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out.Request.JSON.PixKeyType != "document" {
+		t.Errorf("request.json.pix_key_type = %q, want %q", out.Request.JSON.PixKeyType, "document")
+	}
+	if got := out.Request.JSON.Offer.Rate.String(); got != "0.011" {
+		t.Errorf("request.json.offer.rate = %q, want %q verbatim", got, "0.011")
+	}
+	if out.Request.JSON.Offer.AdvanceInitialDate != "2026-08-28" {
+		t.Errorf("request.json.offer.advance_initial_date = %q, want %q", out.Request.JSON.Offer.AdvanceInitialDate, "2026-08-28")
+	}
+	if out.Response.JSON.ContractID != "coreai-1" {
+		t.Errorf("response.json.contract_anticipation_request_id = %q, want %q", out.Response.JSON.ContractID, "coreai-1")
+	}
+}
+
+func TestGetTrafficOmitsJSONForNonJSONRecordedBody(t *testing.T) {
+	reqMsg, err := usecase.EncodeRecordedMessage(usecase.RecordedMessage{Body: []byte("plain=form&data=1")})
+	if err != nil {
+		t.Fatalf("EncodeRecordedMessage(req): %v", err)
+	}
+	respMsg, err := usecase.EncodeRecordedMessage(usecase.RecordedMessage{Body: []byte("<html/>")})
+	if err != nil {
+		t.Fatalf("EncodeRecordedMessage(resp): %v", err)
+	}
+	uc := &fakeGetTrafficUseCase{record: domain.TrafficRecord{ID: "t1", Request: reqMsg, Response: respMsg}}
+	rr := httptest.NewRecorder()
+	GetTraffic(uc)(rr, newGetRequest(t, "/__lyrebird/traffic/t1"))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	if strings.Contains(rr.Body.String(), `"json"`) {
+		t.Errorf("body = %s, want no json key for non-JSON bodies", rr.Body)
+	}
+}
+
 func TestGetTrafficMapsUseCaseErrorViaExplain(t *testing.T) {
 	uc := &fakeGetTrafficUseCase{err: domain.ErrNotFound}
 	rr := httptest.NewRecorder()
