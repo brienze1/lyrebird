@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"time"
@@ -104,9 +105,13 @@ func registerTrafficTools(s *sdkmcp.Server, deps Deps) {
 		return nil, ListTrafficOut{Traffic: toSummaries(list)}, nil
 	})
 
+	// json.RawMessage is a []byte underneath, but on the wire it is arbitrary JSON,
+	// not base64 and not a byte array. Without its own entry the generator would
+	// describe it as items:{integer 0..255} and misdescribe every decoded body.
 	getTrafficOutSchema, err := jsonschema.For[dto.TrafficDetailDTO](&jsonschema.ForOptions{
 		TypeSchemas: map[reflect.Type]*jsonschema.Schema{
-			reflect.TypeFor[[]byte](): {Types: []string{"null", "string"}, ContentEncoding: "base64"},
+			reflect.TypeFor[[]byte]():          {Types: []string{"null", "string"}, ContentEncoding: "base64"},
+			reflect.TypeFor[json.RawMessage](): {},
 		},
 	})
 	if err != nil {
