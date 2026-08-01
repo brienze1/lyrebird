@@ -5,6 +5,9 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # Callable so the release workflow can gate publishing on exactly these
+  # checks, rather than restating them and letting the two drift.
+  workflow_call:
 
 jobs:
   verify:
