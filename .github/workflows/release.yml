@@ -10,7 +10,14 @@ permissions:
   packages: write
 
 jobs:
+  # A tag push publishes :latest to every consumer, and CI does not run on tags —
+  # so without this gate the most widely pulled image in the registry is the one
+  # ref nobody verified. Reused rather than restated so the two cannot drift.
+  verify:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
