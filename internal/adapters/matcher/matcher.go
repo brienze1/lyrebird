@@ -109,7 +109,7 @@ func (e *Engine) Matches(m domain.Match, in usecase.MatchInput) (bool, []usecase
 	}
 
 	for name, matcher := range m.Headers {
-		actual, present := headerValue(in.Header, name)
+		actual, present := requestHeaderValue(in, name)
 		passed := evalMatcher(matcher, actual, present)
 		results = append(results, usecase.ConditionResult{Field: "header." + name, Expected: describeMatcher(matcher), Actual: actual, Passed: passed})
 		overall = overall && passed
@@ -159,6 +159,28 @@ func matchPath(pattern, actual string) (bool, string) {
 // apply), and returns its first value.
 func headerValue(header map[string][]string, name string) (string, bool) {
 	return firstValue(header, textproto.CanonicalMIMEHeaderKey(name))
+}
+
+// requestHeaderValue reads a header condition's subject, resolving "Host" from
+// the request's authority rather than the header map.
+//
+// net/http promotes the Host header onto Request.Host and deletes it from
+// Header, so a `headers: {Host: ...}` condition evaluated against the map alone
+// can never pass — it silently never matches, and the request falls through to
+// the upstream as though no mock existed. That is the worst shape of failure
+// available here: no error, no log, just a mock that quietly does nothing.
+//
+// The header map still wins when it does carry the key, so a non-HTTP caller
+// that legitimately puts Host there (or gRPC's :authority, passed through as an
+// ordinary header) keeps behaving as before.
+func requestHeaderValue(in usecase.MatchInput, name string) (string, bool) {
+	if actual, present := headerValue(in.Header, name); present {
+		return actual, true
+	}
+	if textproto.CanonicalMIMEHeaderKey(name) == "Host" && in.Host != "" {
+		return in.Host, true
+	}
+	return "", false
 }
 
 func firstValue(m map[string][]string, key string) (string, bool) {
