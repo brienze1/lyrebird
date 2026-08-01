@@ -156,7 +156,7 @@ func (h *Handler) serveOne(w http.ResponseWriter, r *http.Request, partition str
 	}
 
 	in := usecase.MatchInput{
-		Method: r.Method, Path: r.URL.Path,
+		Method: r.Method, Path: r.URL.Path, Host: r.Host,
 		Header: map[string][]string(r.Header), Query: map[string][]string(r.URL.Query()),
 		Body: peeked,
 	}

@@ -10,6 +10,7 @@ import (
 type MatchTestRequestDTO struct {
 	Method  string              `json:"method"`
 	Path    string              `json:"path"`
+	Host    string              `json:"host,omitempty"`
 	Headers map[string][]string `json:"headers,omitempty"`
 	Query   map[string][]string `json:"query,omitempty"`
 	Body    string              `json:"body,omitempty"`
@@ -60,9 +61,20 @@ func CanonicalizeHeaders(h map[string][]string) map[string][]string {
 
 // MatchTestInputFromDTO converts a MatchTestRequestDTO to a usecase.MatchInput.
 func MatchTestInputFromDTO(req MatchTestRequestDTO) usecase.MatchInput {
+	headers := CanonicalizeHeaders(req.Headers)
+	host := req.Host
+	if host == "" {
+		// A submission that puts the authority in the header map is honouring
+		// the shape of the thing it is predicting, so accept it there too —
+		// otherwise the dry-run disagrees with live traffic, which is the one
+		// thing it exists not to do.
+		if vs, ok := headers["Host"]; ok && len(vs) > 0 {
+			host = vs[0]
+		}
+	}
 	return usecase.MatchInput{
-		Method: req.Method, Path: req.Path,
-		Header: CanonicalizeHeaders(req.Headers), Query: req.Query, Body: []byte(req.Body),
+		Method: req.Method, Path: req.Path, Host: host,
+		Header: headers, Query: req.Query, Body: []byte(req.Body),
 	}
 }
 

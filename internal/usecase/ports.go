@@ -116,6 +116,11 @@ type IDGen interface{ NewID() string }
 type MatchInput struct {
 	Method string
 	Path   string
+	// Host is the request's authority — r.Host on the HTTP data plane. It is
+	// carried separately because net/http strips Host out of Header and exposes
+	// it only on the Request, so a header condition on "Host" would otherwise
+	// evaluate against a map that can never contain it.
+	Host   string
 	Header map[string][]string
 	Query  map[string][]string
 	Body   []byte
