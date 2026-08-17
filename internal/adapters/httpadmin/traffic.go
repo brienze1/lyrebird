@@ -83,6 +83,8 @@ func parseTrafficFilter(r *http.Request) (usecase.TrafficFilter, error) {
 	filter.Method = q.Get("method")
 	filter.Host = q.Get("host")
 	filter.PathPrefix = q.Get("path_prefix")
+	filter.RequestBodyPath = q.Get("request_body_path")
+	filter.RequestBodyEquals = q.Get("request_body_equals")
 
 	if raw := q.Get("status"); raw != "" {
 		status, err := strconv.Atoi(raw)

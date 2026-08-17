@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/brienze1/lyrebird/internal/adapters/jsonpath"
 	"github.com/brienze1/lyrebird/internal/domain"
 )
 
@@ -24,7 +25,34 @@ func (uc *ListTraffic) Execute(ctx context.Context, partition string, filter Tra
 	if filter.Limit < 0 {
 		return nil, fmt.Errorf("%w: limit must not be negative", domain.ErrInvalidTrafficFilter)
 	}
-	return uc.repo.ListTraffic(ctx, partition, filter)
+	if (filter.RequestBodyPath == "") != (filter.RequestBodyEquals == "") {
+		return nil, fmt.Errorf("%w: request body path and value must be given together",
+			domain.ErrInvalidTrafficFilter)
+	}
+
+	records, err := uc.repo.ListTraffic(ctx, partition, filter)
+	if err != nil || filter.RequestBodyPath == "" {
+		return records, err
+	}
+	return keepMatchingRequestBody(records, filter.RequestBodyPath, filter.RequestBodyEquals), nil
+}
+
+// keepMatchingRequestBody drops entries whose request body does not carry the
+// wanted value at path. An entry that cannot be decoded is dropped rather than
+// kept: the caller asked for a specific request, and "we could not tell" is not
+// a match.
+func keepMatchingRequestBody(records []domain.TrafficRecord, path, want string) []domain.TrafficRecord {
+	kept := make([]domain.TrafficRecord, 0, len(records))
+	for _, record := range records {
+		message, err := DecodeRecordedMessage(record.Request)
+		if err != nil {
+			continue
+		}
+		if jsonpath.GetBytes(message.Body, path).String() == want {
+			kept = append(kept, record)
+		}
+	}
+	return kept
 }
 
 // GetTraffic returns one recorded interaction by id.
