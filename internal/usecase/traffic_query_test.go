@@ -50,3 +50,63 @@ func TestListTrafficAcceptsZeroOrPositiveLimit(t *testing.T) {
 		})
 	}
 }
+
+// A caller looking for one specific request among a shared log needs the body
+// filter to be exact: without it the only option is a detail fetch per entry.
+func TestListTrafficFiltersByRequestBody(t *testing.T) {
+	mine, err := EncodeRecordedMessage(RecordedMessage{
+		Body: []byte(`{"offer":{"issuer_tax_id":"11122233344"}}`),
+	})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	theirs, err := EncodeRecordedMessage(RecordedMessage{
+		Body: []byte(`{"offer":{"issuer_tax_id":"99988877766"}}`),
+	})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	undecodable := []byte("not a recorded message")
+
+	repo := &fakeTrafficRepo{listResult: []domain.TrafficRecord{
+		{ID: "theirs", Request: theirs},
+		{ID: "mine", Request: mine},
+		{ID: "broken", Request: undecodable},
+	}}
+	uc := NewListTraffic(repo)
+
+	got, err := uc.Execute(context.Background(), "default", TrafficFilter{
+		RequestBodyPath:   "offer.issuer_tax_id",
+		RequestBodyEquals: "11122233344",
+	})
+	if err != nil {
+		t.Fatalf("Execute(): %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "mine" {
+		t.Fatalf("got %v, want just the entry whose body matches", ids(got))
+	}
+
+	// Without the filter nothing is dropped, including what cannot be decoded.
+	got, err = uc.Execute(context.Background(), "default", TrafficFilter{})
+	if err != nil {
+		t.Fatalf("Execute(): %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d records, want all 3 when no body filter is set", len(got))
+	}
+
+	// Half a filter is a caller mistake, not an empty result.
+	if _, err = uc.Execute(context.Background(), "default", TrafficFilter{
+		RequestBodyPath: "offer.issuer_tax_id",
+	}); err == nil {
+		t.Fatal("Execute() accepted a body path with no value")
+	}
+}
+
+func ids(records []domain.TrafficRecord) []string {
+	out := make([]string, 0, len(records))
+	for _, r := range records {
+		out = append(out, r.ID)
+	}
+	return out
+}

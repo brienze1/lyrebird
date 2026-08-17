@@ -20,6 +20,14 @@ type TrafficFilter struct {
 	Status     *int
 	Since      *time.Time
 	Until      *time.Time
+	// RequestBodyPath and RequestBodyEquals keep only entries whose recorded
+	// request body has that gjson path equal to that value. Unlike every other
+	// field here this cannot be pushed into SQL — the body is sealed in the
+	// opaque blob — so it is applied after decode. It exists because the
+	// alternative for a caller is fetching each entry's detail over HTTP just
+	// to look at its body, which costs one round-trip per row.
+	RequestBodyPath   string
+	RequestBodyEquals string
 	// Limit bounds the number of rows returned (0 = unbounded, the default
 	// when a caller doesn't specify one). Applied at the SQL layer (a
 	// genuine LIMIT, not fetch-all-then-slice) since traffic volume, unlike

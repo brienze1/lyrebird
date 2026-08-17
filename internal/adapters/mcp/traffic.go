@@ -17,8 +17,8 @@ import (
 
 // ListTrafficIn is list_traffic's input. Field-for-field parity with
 // httpadmin's parseTrafficFilter (method/host/path_prefix/status/since/
-// until/limit) is deliberate — REST must not expose a filter MCP lacks
-// (constitution Principle II).
+// until/limit plus the request-body pair) is deliberate — REST must not
+// expose a filter MCP lacks (constitution Principle II).
 type ListTrafficIn struct {
 	Space  string `json:"space,omitempty" jsonschema:"space/partition to list; defaults to the server's default space"`
 	Method string `json:"method,omitempty" jsonschema:"filter to this exact HTTP method"`
@@ -28,6 +28,11 @@ type ListTrafficIn struct {
 	Since  string `json:"since,omitempty" jsonschema:"RFC3339 timestamp; only traffic at or after this time"`
 	Until  string `json:"until,omitempty" jsonschema:"RFC3339 timestamp; only traffic at or before this time"`
 	Limit  int    `json:"limit,omitempty" jsonschema:"maximum number of records to return"`
+	// Given together: keeps only traffic whose recorded request body has this
+	// gjson path equal to this value. One tells two callers' requests apart
+	// without a detail fetch per record.
+	RequestBodyPath   string `json:"request_body_path,omitempty" jsonschema:"gjson path into the recorded request body; must be given with request_body_equals"`
+	RequestBodyEquals string `json:"request_body_equals,omitempty" jsonschema:"value the request body must carry at request_body_path; must be given with request_body_path"`
 }
 
 // ListTrafficOut is list_traffic's and inspect_requests's output.
@@ -90,8 +95,10 @@ type PromoteTrafficIn struct {
 
 func registerTrafficTools(s *sdkmcp.Server, deps Deps) {
 	sdkmcp.AddTool(s, &sdkmcp.Tool{
-		Name:        "list_traffic",
-		Description: `List recorded traffic, filterable by host/path/status/since/limit. Example: {"limit":20}`,
+		Name: "list_traffic",
+		Description: `List recorded traffic, filterable by host/path/status/since/limit, and by a value in ` +
+			`the recorded request body. Example: {"limit":20} or ` +
+			`{"path":"/pay","request_body_path":"order.id","request_body_equals":"42"}`,
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in ListTrafficIn) (*sdkmcp.CallToolResult, ListTrafficOut, error) {
 		partition := resolveSpace(in.Space, deps.DefaultSpace)
 		filter, err := trafficFilterFromIn(in)
@@ -215,7 +222,10 @@ func registerTrafficTools(s *sdkmcp.Server, deps Deps) {
 }
 
 func trafficFilterFromIn(in ListTrafficIn) (usecase.TrafficFilter, error) {
-	filter := usecase.TrafficFilter{Method: in.Method, Host: in.Host, PathPrefix: in.Path, Status: in.Status, Limit: in.Limit}
+	filter := usecase.TrafficFilter{
+		Method: in.Method, Host: in.Host, PathPrefix: in.Path, Status: in.Status, Limit: in.Limit,
+		RequestBodyPath: in.RequestBodyPath, RequestBodyEquals: in.RequestBodyEquals,
+	}
 	if in.Since != "" {
 		since, err := time.Parse(time.RFC3339, in.Since)
 		if err != nil {
