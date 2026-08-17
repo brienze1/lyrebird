@@ -28,9 +28,8 @@ type ListTrafficIn struct {
 	Since  string `json:"since,omitempty" jsonschema:"RFC3339 timestamp; only traffic at or after this time"`
 	Until  string `json:"until,omitempty" jsonschema:"RFC3339 timestamp; only traffic at or before this time"`
 	Limit  int    `json:"limit,omitempty" jsonschema:"maximum number of records to return"`
-	// Given together: keeps only traffic whose recorded request body has this
-	// gjson path equal to this value. One tells two callers' requests apart
-	// without a detail fetch per record.
+	// Given together: keeps only traffic whose request body carries this value
+	// at this path.
 	RequestBodyPath   string `json:"request_body_path,omitempty" jsonschema:"gjson path into the recorded request body; must be given with request_body_equals"`
 	RequestBodyEquals string `json:"request_body_equals,omitempty" jsonschema:"value the request body must carry at request_body_path; must be given with request_body_path"`
 }
