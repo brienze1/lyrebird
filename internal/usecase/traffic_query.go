@@ -55,10 +55,8 @@ func (uc *ListTraffic) Execute(ctx context.Context, partition string, filter Tra
 	return matching, nil
 }
 
-// keepMatchingRequestBody drops entries whose request body does not carry the
-// wanted value at path. An entry that cannot be decoded is dropped rather than
-// kept: the caller asked for a specific request, and "we could not tell" is not
-// a match.
+// keepMatchingRequestBody drops entries whose request body does not carry want
+// at path, including any it cannot decode.
 func keepMatchingRequestBody(records []domain.TrafficRecord, path, want string) []domain.TrafficRecord {
 	kept := make([]domain.TrafficRecord, 0, len(records))
 	for _, record := range records {
