@@ -110,3 +110,39 @@ func ids(records []domain.TrafficRecord) []string {
 	}
 	return out
 }
+
+func TestListTrafficAppliesLimitAfterTheBodyFilter(t *testing.T) {
+	// Two entries under the same path, the caller's older than somebody else's. With
+	// limit=1 pushed into the store the newest would be fetched and then discarded by
+	// the body filter, and the caller would be told its request never happened.
+	mine, err := EncodeRecordedMessage(RecordedMessage{Body: []byte(`{"offer":{"issuer_tax_id":"11122233344"}}`)})
+	if err != nil {
+		t.Fatalf("EncodeRecordedMessage(): %v", err)
+	}
+	theirs, err := EncodeRecordedMessage(RecordedMessage{Body: []byte(`{"offer":{"issuer_tax_id":"99988877766"}}`)})
+	if err != nil {
+		t.Fatalf("EncodeRecordedMessage(): %v", err)
+	}
+
+	repo := &fakeTrafficRepo{listResult: []domain.TrafficRecord{
+		{ID: "theirs", Request: theirs},
+		{ID: "mine", Request: mine},
+	}}
+	uc := NewListTraffic(repo)
+
+	got, err := uc.Execute(context.Background(), "default", TrafficFilter{
+		Limit:             1,
+		RequestBodyPath:   "offer.issuer_tax_id",
+		RequestBodyEquals: "11122233344",
+	})
+	if err != nil {
+		t.Fatalf("Execute(): %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "mine" {
+		t.Fatalf("got %v, want just the caller's own entry", ids(got))
+	}
+	if repo.listFilter.Limit != 0 {
+		t.Fatalf("the store was asked for %d rows; a body filter has to scan unbounded and cap afterwards",
+			repo.listFilter.Limit)
+	}
+}
