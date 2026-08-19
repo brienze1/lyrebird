@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/brienze1/lyrebird/internal/domain"
@@ -68,29 +69,104 @@ func (uc *MatchRequest) Execute(ctx context.Context, partition string, in MatchI
 		return domain.Mock{}, false, err
 	}
 	for _, m := range candidates {
-		ok, _ := uc.match.Matches(m.Match, in)
-		if !ok {
-			continue
+		ok, cerr := uc.candidateMatches(ctx, partition, m, in)
+		if cerr != nil {
+			return zeroUnlessScriptError(m, cerr), false, cerr
 		}
-		exhausted, serr := scenarioExhausted(ctx, uc.scenario, partition, m)
-		if serr != nil {
-			return domain.Mock{}, false, fmt.Errorf("usecase: match request: peek scenario: %w", serr)
+		if ok {
+			return m, true, nil
 		}
-		if exhausted {
-			continue
-		}
-		if m.Script != nil && m.Script.MatchSrc != "" {
-			sok, serr := uc.script.EvalMatch(m.Script.MatchSrc, in)
-			if serr != nil {
-				return m, false, &ScriptError{MockID: m.ID, Phase: "match", Err: serr}
-			}
-			if !sok {
-				continue
-			}
-		}
-		return m, true, nil
 	}
 	return domain.Mock{}, false, nil
+}
+
+// ExecuteProjected is Execute for a data plane whose request body is not one
+// fixed document but is DERIVED per candidate — today, the byte-stream plane,
+// where a rule may declare its own projection of the frame's bytes and so
+// must be evaluated against a different MatchInput.Body than its neighbours
+// (003's FR-006).
+//
+// It exists rather than the adapter looping candidates itself because that
+// loop is where mock precedence, scenario exhaustion and script gating live:
+// re-implementing it in an adapter would both duplicate FR-009a's ordering
+// and put business logic outside the use-case layer. The adapter supplies
+// only the one thing it alone knows — how to project the bytes for a given
+// mock — through the BodyProjector port.
+//
+// It returns the MatchInput the winning candidate was actually evaluated
+// against, so the caller builds its response (and resolves any copyFrom
+// path) against the same projection the match used, not a different one.
+//
+// A projector error for one candidate SKIPS that candidate rather than
+// failing the frame: a rule whose projection cannot read these particular
+// bytes has simply not matched them, and a lower-priority rule that can read
+// them should still get its turn.
+func (uc *MatchRequest) ExecuteProjected(
+	ctx context.Context, partition string, base MatchInput, p BodyProjector,
+) (domain.Mock, MatchInput, bool, error) {
+	candidates, err := loadSortedCandidates(ctx, uc.repo, uc.seeds, partition)
+	if err != nil {
+		return domain.Mock{}, base, false, err
+	}
+	for _, m := range candidates {
+		in := base
+		if p != nil {
+			body, perr := p.ProjectFor(m)
+			if perr != nil {
+				continue
+			}
+			in.Body = body
+		}
+		ok, cerr := uc.candidateMatches(ctx, partition, m, in)
+		if cerr != nil {
+			return zeroUnlessScriptError(m, cerr), in, false, cerr
+		}
+		if ok {
+			return m, in, true, nil
+		}
+	}
+	return domain.Mock{}, base, false, nil
+}
+
+// candidateMatches evaluates one candidate: declarative conditions first
+// (cheapest), then scenario exhaustion, then the AND-composed script gate —
+// so a candidate whose declarative Match never passes is never sandboxed at
+// all. Shared by Execute and ExecuteProjected so the two can never drift on
+// precedence, exhaustion or fail-safe script semantics.
+func (uc *MatchRequest) candidateMatches(
+	ctx context.Context, partition string, m domain.Mock, in MatchInput,
+) (bool, error) {
+	if ok, _ := uc.match.Matches(m.Match, in); !ok {
+		return false, nil
+	}
+	exhausted, err := scenarioExhausted(ctx, uc.scenario, partition, m)
+	if err != nil {
+		return false, fmt.Errorf("usecase: match request: peek scenario: %w", err)
+	}
+	if exhausted {
+		return false, nil
+	}
+	if m.Script != nil && m.Script.MatchSrc != "" {
+		ok, err := uc.script.EvalMatch(m.Script.MatchSrc, in)
+		if err != nil {
+			return false, &ScriptError{MockID: m.ID, Phase: "match", Err: err}
+		}
+		return ok, nil
+	}
+	return true, nil
+}
+
+// zeroUnlessScriptError preserves the mock-returning contract callers depend
+// on: a *ScriptError comes back with the offending mock attached (the proxy
+// Handler needs its id to record DecisionScriptFailed), while any other
+// failure returns the zero Mock so a caller cannot mistake a half-evaluated
+// candidate for a match.
+func zeroUnlessScriptError(m domain.Mock, err error) domain.Mock {
+	var se *ScriptError
+	if errors.As(err, &se) {
+		return m
+	}
+	return domain.Mock{}
 }
 
 // BuildRespondOutput resolves a matched mock's RespondAction into concrete

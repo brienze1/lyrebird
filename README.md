@@ -76,6 +76,8 @@ Every variable is optional; Lyrebird runs with sane defaults if none are set.
 |---|---|---|
 | `LYREBIRD_DATA_PORT` | data-plane listen port | `8080` |
 | `LYREBIRD_CONTROL_PORT` | control-plane listen port (MCP + Admin REST) | `9090` |
+| `LYREBIRD_GRPC_PORT` | plaintext-gRPC (h2c) data-plane port — **opt-in**, no gRPC listener when unset | unset — disabled |
+| `LYREBIRD_STREAM_PORT` | generic byte-stream data-plane port — **opt-in**, no TCP listener when unset | unset — disabled |
 | `LYREBIRD_DEFAULT_SPACE` | default partition/space name | `default` |
 | `LYREBIRD_SEED_DIR` | directory of seed config YAML, loaded at boot | `/config` |
 | `LYREBIRD_DB_PATH` | SQLite store file path (traffic log + ephemeral mocks) | `/data/lyrebird.db` |

@@ -46,4 +46,5 @@ func InitializeScenario(ctx *godog.ScenarioContext) {
 	RegisterImportExportSteps(ctx, s)
 	RegisterGRPCSteps(ctx, s)
 	RegisterGRPCKMSSteps(ctx, s)
+	RegisterStreamSteps(ctx, s)
 }

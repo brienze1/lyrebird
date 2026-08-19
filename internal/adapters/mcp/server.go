@@ -70,12 +70,25 @@ type deleteSpacePort interface {
 	Execute(ctx context.Context, id string) error
 }
 
+type endpointsPort interface {
+	Create(ctx context.Context, in usecase.EndpointInput) (domain.Endpoint, error)
+	List(ctx context.Context, partition string) ([]usecase.EndpointView, error)
+	Delete(ctx context.Context, partition, name string) error
+}
+
+type emitFramePort interface {
+	Execute(ctx context.Context, in usecase.EmitFrameInput) error
+}
+
 type exportSeedsPort interface {
 	Execute(ctx context.Context, partition string) (usecase.ExportBundle, error)
 }
 
 type importSeedsPort interface {
-	Execute(ctx context.Context, partition string, upstreams []domain.Upstream, mocks []usecase.MockInput) (usecase.ImportResult, error)
+	Execute(
+		ctx context.Context, partition string,
+		upstreams []domain.Upstream, mocks []usecase.MockInput, endpoints []usecase.EndpointInput,
+	) (usecase.ImportResult, error)
 }
 
 // Deps is every use-case (interface-shaped, matching httpadmin's own
@@ -101,6 +114,8 @@ type Deps struct {
 	DeleteSpace    deleteSpacePort
 	ExportSeeds    exportSeedsPort
 	ImportSeeds    importSeedsPort
+	Endpoints      endpointsPort
+	EmitFrame      emitFramePort
 
 	// GetMITMCACert is Deps' one deliberately-optional field: nil unless
 	// MITM is enabled (constitution Principle V), unlike every other field
@@ -128,5 +143,6 @@ func New(deps Deps) *sdkmcp.Server {
 	registerMITMTools(s, deps)
 	registerExampleTools(s)
 	registerImportExportTools(s, deps)
+	registerStreamTools(s, deps)
 	return s
 }

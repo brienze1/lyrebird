@@ -1,0 +1,28 @@
+{
+  "id": "byte-stream-endpoint",
+  "title": "Byte-stream data plane: framing, projection, answers and cadence",
+  "provider": "generic",
+  "service": "byte-stream",
+  "description": "Substitute a peripheral that speaks framed bytes rather than HTTP or gRPC — a serial line, a serial-profile radio link, a pin-level control channel. Turn the plane on with LYREBIRD_STREAM_PORT (unset means no listener at all). 1) DECLARE THE BOUNDARY with create_endpoint (or POST /__lyrebird/stream/endpoints): `framing` says where one frame ends — exactly one of {\"delimiter\":\"\\r\\n\"}, {\"delimiter_hex\":\"0a\"}, {\"length\":16} or {\"prefix\":{\"width\":2,\"endian\":\"big\"}} — and the optional `projection` decomposes a frame into addressable fields for every rule on it. 2) CONNECT A STAND-IN: your fake peripheral dials TCP and sends one CRLF-terminated line, `LYREBIRD/1 <endpoint>`, optionally with `space=<name>` and any other key=value pairs (which become match headers). The server replies OK, or an ERR line naming the problem, and closes. One stand-in per endpoint. 3) AUTHOR RULES as ORDINARY MOCKS — create_mock with match.method \"FRAME\" and match.path \"/<endpoint>\" — so spaces, seeds, reset, TTL/GC, scripting, promote_traffic, metrics and export all apply unchanged. Every frame is projected into an envelope your existing JSONPath body matchers address: $.len, $.hex and $.text (latin-1, so every byte round-trips) are always present; $.fields.N appears when a `split` is declared and $.at.<name> for each declared offset/length field. NOTE gjson-style paths: use $.fields.0, not $.fields[0]. The envelope is built from the frame's PAYLOAD — the framing delimiter or length prefix is stripped — while the traffic log keeps the exact bytes. A rule may carry its own `projection` to read the same bytes differently from its neighbours. 4) BUILD THE ANSWER from a part list carried as the respond body: [{\"text\":\"OK\"}], [{\"hex\":\"0d0a\"}], [{\"int\":7,\"width\":3,\"pad\":\"0\"}], [{\"copyFrom\":\"$.fields.1\"}] to echo part of the triggering frame, or [{\"repeat\":{\"hex\":\"00\"},\"times\":4}]. The endpoint's terminator is appended automatically unless the spec is the object form with \"raw\": true. A mock's script.respond_src works here too (unlike the gRPC plane) — return the part-list JSON as a string. 5) FAULTS are ordinary fault actions: delay (a slow line — the answer is an empty frame arriving late), reset (the connection drops, as if the peripheral were unplugged), timeout (silence — distinguishable from an unmatched frame only by the recorded decision), malformed (bytes written without the framing terminator). 6) TALK WITHOUT BEING ASKED: declare a `cadence` on the endpoint ({\"interval\":\"100ms\",\"frames\":[\"[{\\\"text\\\":\\\"TICK\\\"}]\"],\"on_exhaustion\":\"repeat_last\"|\"loop\"|\"stop\"}) for a source that streams on its own schedule, and use emit_frame to push one chosen frame into a live connection mid-scenario. Both are recorded with method EMIT; an inbound frame is IN and an answer is OUT. NOT SERVED: action.proxy — there is no real device to forward to, and such a rule is rejected when it is created. Every value in the mock below is invented.",
+  "mock": {
+    "name": "byte-stream-example",
+    "match": {
+      "method": "FRAME",
+      "path": "/widget",
+      "body": [
+        { "jsonpath": "$.fields.0", "equals": "READ" }
+      ]
+    },
+    "projection": {
+      "split": ",",
+      "at": [
+        { "name": "kind", "offset": 0, "length": 1, "as": "text" }
+      ]
+    },
+    "action": {
+      "respond": {
+        "body": "[{\"text\":\"VALUE,\"},{\"copyFrom\":\"$.fields.1\"}]"
+      }
+    }
+  }
+}

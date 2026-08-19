@@ -25,7 +25,7 @@ type fakeImportSeedsPort struct {
 	err          error
 }
 
-func (f *fakeImportSeedsPort) Execute(_ context.Context, _ string, upstreams []domain.Upstream, mocks []usecase.MockInput) (usecase.ImportResult, error) {
+func (f *fakeImportSeedsPort) Execute(_ context.Context, _ string, upstreams []domain.Upstream, mocks []usecase.MockInput, _ []usecase.EndpointInput) (usecase.ImportResult, error) {
 	f.gotUpstreams, f.gotMocks = upstreams, mocks
 	return f.result, f.err
 }

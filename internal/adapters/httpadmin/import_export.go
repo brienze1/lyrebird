@@ -17,7 +17,10 @@ type exportSeedsUseCase interface {
 }
 
 type importSeedsUseCase interface {
-	Execute(ctx context.Context, partition string, upstreams []domain.Upstream, mocks []usecase.MockInput) (usecase.ImportResult, error)
+	Execute(
+		ctx context.Context, partition string,
+		upstreams []domain.Upstream, mocks []usecase.MockInput, endpoints []usecase.EndpointInput,
+	) (usecase.ImportResult, error)
 }
 
 // ExportConfig handles GET /__lyrebird/export (contracts/admin-rest.md).
@@ -29,7 +32,7 @@ func ExportConfig(uc exportSeedsUseCase) http.HandlerFunc {
 			writeUseCaseError(w, err)
 			return
 		}
-		raw, err := yaml.Marshal(dto.SeedBundleToDTO(bundle))
+		raw, err := dto.RenderSeedBundleYAML(bundle)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, err)
 			return
@@ -53,13 +56,13 @@ func ImportConfig(uc importSeedsUseCase) http.HandlerFunc {
 			return
 		}
 
-		upstreams, mocks, err := dto.SeedBundleFromDTO(partition, bundle)
+		upstreams, mocks, endpoints, err := dto.SeedBundleFromDTO(partition, bundle)
 		if err != nil {
 			writeUseCaseError(w, err)
 			return
 		}
 
-		result, err := uc.Execute(r.Context(), partition, upstreams, mocks)
+		result, err := uc.Execute(r.Context(), partition, upstreams, mocks, endpoints)
 		if err != nil {
 			writeUseCaseError(w, err)
 			return
