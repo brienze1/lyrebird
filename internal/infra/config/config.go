@@ -23,7 +23,14 @@ type Config struct {
 	// (constitution Principle V — a new surface only appears when explicitly
 	// configured). The gRPC data plane, like the HTTP data plane, is never
 	// authenticated (FR-011).
-	GRPCPlaneAddr   string
+	GRPCPlaneAddr string
+	// StreamPlaneAddr is the generic byte-stream data-plane listen address,
+	// from LYREBIRD_STREAM_PORT. Opt-in on exactly the same terms as
+	// GRPCPlaneAddr above: empty means no TCP listener is bound, no endpoint
+	// can be occupied, and Lyrebird behaves exactly as it does without the
+	// feature (003's FR-001/FR-026, constitution Principle V). Like every
+	// other data plane, it is never authenticated.
+	StreamPlaneAddr string
 	TrafficTTL      time.Duration
 	DefaultSpace    string
 	AllowProxyHosts []string
@@ -75,6 +82,11 @@ func Load() (Config, error) {
 	// gRPC listener at all.
 	if port := os.Getenv("LYREBIRD_GRPC_PORT"); port != "" {
 		cfg.GRPCPlaneAddr = ":" + port
+	}
+	// Same opt-in shape for the byte-stream plane: unset leaves
+	// StreamPlaneAddr empty and bootstrap binds no TCP listener at all.
+	if port := os.Getenv("LYREBIRD_STREAM_PORT"); port != "" {
+		cfg.StreamPlaneAddr = ":" + port
 	}
 
 	var err error

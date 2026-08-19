@@ -210,3 +210,135 @@ type noopTemplater struct{}
 
 func (noopTemplater) Render(body []byte, _ MatchInput) []byte                           { return body }
 func (noopTemplater) RenderHeaders(h map[string]string, _ MatchInput) map[string]string { return h }
+
+// bodyEqualsEval matches only when the candidate is evaluated against a body
+// equal to want — the minimum needed to prove ExecuteProjected really gives
+// each candidate the body its own projector produced, rather than one shared
+// body for all of them.
+type bodyEqualsEval struct{ want string }
+
+func (e bodyEqualsEval) Matches(_ domain.Match, in MatchInput) (bool, []ConditionResult) {
+	return string(in.Body) == e.want, nil
+}
+func (bodyEqualsEval) ValidateMatch(_ domain.Match) error { return nil }
+
+// perMockProjector hands each mock its own body, keyed by mock id, and
+// returns an error for any id in failFor.
+type perMockProjector struct {
+	bodies  map[string]string
+	failFor map[string]bool
+}
+
+func (p perMockProjector) ProjectFor(m domain.Mock) ([]byte, error) {
+	if p.failFor[m.ID] {
+		return nil, errors.New("this rule's projection cannot read these bytes")
+	}
+	return []byte(p.bodies[m.ID]), nil
+}
+
+func TestExecuteProjectedGivesEachCandidateItsOwnBody(t *testing.T) {
+	repo := newFakeMockRepo()
+	// Higher priority wins the ordering, so "loser" is tried first and must
+	// genuinely fail on ITS body before "winner" gets a turn.
+	for _, m := range []domain.Mock{
+		{ID: "loser", Partition: "default", Priority: 2, CreatedAt: time.Unix(2, 0)},
+		{ID: "winner", Partition: "default", Priority: 1, CreatedAt: time.Unix(1, 0)},
+	} {
+		if err := repo.CreateMock(context.Background(), m); err != nil {
+			t.Fatalf("CreateMock(): %v", err)
+		}
+	}
+
+	uc := NewMatchRequest(repo, &fakeSeededSource{}, bodyEqualsEval{want: "WINNER-VIEW"},
+		scriptedEval{matchResult: true}, &fakeScenarioStateRepo{})
+	projector := perMockProjector{bodies: map[string]string{
+		"loser":  "LOSER-VIEW",
+		"winner": "WINNER-VIEW",
+	}}
+
+	got, in, matched, err := uc.ExecuteProjected(context.Background(), "default", MatchInput{}, projector)
+	if err != nil {
+		t.Fatalf("ExecuteProjected(): %v", err)
+	}
+	if !matched || got.ID != "winner" {
+		t.Fatalf("matched %q (%v), want the candidate whose own projection matched", got.ID, matched)
+	}
+	// The returned MatchInput must be the one the winner was evaluated
+	// against, so the caller builds its answer (and resolves any copyFrom)
+	// from the same projection the match used.
+	if string(in.Body) != "WINNER-VIEW" {
+		t.Errorf("returned MatchInput.Body = %q, want the winning candidate's own body", in.Body)
+	}
+}
+
+// A projector error means THIS rule cannot read THESE bytes — that candidate
+// has simply not matched. Failing the whole frame would let one bad rule
+// silence every other rule on the endpoint.
+func TestExecuteProjectedSkipsACandidateWhoseProjectionFails(t *testing.T) {
+	repo := newFakeMockRepo()
+	for _, m := range []domain.Mock{
+		{ID: "broken", Partition: "default", Priority: 2, CreatedAt: time.Unix(2, 0)},
+		{ID: "good", Partition: "default", Priority: 1, CreatedAt: time.Unix(1, 0)},
+	} {
+		if err := repo.CreateMock(context.Background(), m); err != nil {
+			t.Fatalf("CreateMock(): %v", err)
+		}
+	}
+
+	uc := NewMatchRequest(repo, &fakeSeededSource{}, bodyEqualsEval{want: "OK"},
+		scriptedEval{matchResult: true}, &fakeScenarioStateRepo{})
+	projector := perMockProjector{
+		bodies:  map[string]string{"good": "OK"},
+		failFor: map[string]bool{"broken": true},
+	}
+
+	got, _, matched, err := uc.ExecuteProjected(context.Background(), "default", MatchInput{}, projector)
+	if err != nil {
+		t.Fatalf("ExecuteProjected(): %v", err)
+	}
+	if !matched || got.ID != "good" {
+		t.Errorf("matched %q (%v), want the lower-priority rule that could read the bytes", got.ID, matched)
+	}
+}
+
+// A nil projector means "every candidate sees the base body" — the same
+// semantics Execute has, so the two can never disagree for a plane that has
+// nothing per-rule to project.
+func TestExecuteProjectedWithNoProjectorUsesTheBaseBody(t *testing.T) {
+	repo := newFakeMockRepo()
+	if err := repo.CreateMock(context.Background(), domain.Mock{ID: "only", Partition: "default"}); err != nil {
+		t.Fatalf("CreateMock(): %v", err)
+	}
+
+	uc := NewMatchRequest(repo, &fakeSeededSource{}, bodyEqualsEval{want: "BASE"},
+		scriptedEval{matchResult: true}, &fakeScenarioStateRepo{})
+
+	got, in, matched, err := uc.ExecuteProjected(context.Background(), "default", MatchInput{Body: []byte("BASE")}, nil)
+	if err != nil {
+		t.Fatalf("ExecuteProjected(): %v", err)
+	}
+	if !matched || got.ID != "only" || string(in.Body) != "BASE" {
+		t.Errorf("ExecuteProjected() = (%q, %q, %v), want the base body used unchanged", got.ID, in.Body, matched)
+	}
+}
+
+// A script failure must still come back with the offending mock attached, so
+// a caller can record which rule blew up — the same contract Execute has.
+func TestExecuteProjectedPropagatesAScriptErrorWithItsMock(t *testing.T) {
+	repo := newFakeMockRepo()
+	if err := repo.CreateMock(context.Background(), mockWithScript("scripted", 1, "boom()")); err != nil {
+		t.Fatalf("CreateMock(): %v", err)
+	}
+
+	uc := NewMatchRequest(repo, &fakeSeededSource{}, alwaysMatchEval{},
+		scriptedEval{matchErr: errors.New("boom")}, &fakeScenarioStateRepo{})
+
+	got, _, matched, err := uc.ExecuteProjected(context.Background(), "default", MatchInput{}, nil)
+	var se *ScriptError
+	if !errors.As(err, &se) {
+		t.Fatalf("ExecuteProjected() err = %v, want a *ScriptError", err)
+	}
+	if matched || got.ID != "scripted" || se.MockID != "scripted" {
+		t.Errorf("ExecuteProjected() = (%q, %v), want the offending mock returned unmatched", got.ID, matched)
+	}
+}

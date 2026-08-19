@@ -72,5 +72,11 @@ func (uc *PromoteTraffic) Execute(ctx context.Context, in PromoteTrafficInput) (
 
 	return uc.mocks.Create(ctx, MockInput{
 		Partition: in.Partition, Name: name, Match: match, Action: action, TTLSeconds: in.TTLSeconds,
+		// The created mock's match and body are bytes that actually crossed
+		// a data plane, so the file an export writes may carry real content.
+		// Marking it here — not inferring it later from the "promoted-"
+		// name, which a caller-supplied Name silently defeats — is what lets
+		// export_config warn honestly (003's FR-035).
+		FromCapture: true,
 	})
 }

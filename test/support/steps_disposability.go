@@ -41,6 +41,7 @@ type appState struct {
 	trafficTTL      time.Duration
 	allowProxyHosts []string
 	grpcEnabled     bool
+	streamEnabled   bool
 	mitmEnabled     bool
 	mitmCACertFile  string
 	mitmCAKeyFile   string
@@ -179,10 +180,19 @@ func (s *appState) bootWithDataKey(ctx context.Context, dataKeyB64 string) error
 		grpcAddr = "127.0.0.1:0"
 	}
 
+	// Same opt-in shape for the byte-stream plane: bound only when a
+	// scenario explicitly asked for it, so every other scenario boots
+	// exactly as it did before the plane existed (003's FR-026/SC-005).
+	streamAddr := ""
+	if s.streamEnabled {
+		streamAddr = "127.0.0.1:0"
+	}
+
 	cfg := config.Config{
 		DataPlaneAddr:    "127.0.0.1:0",
 		ControlPlaneAddr: "127.0.0.1:0",
 		GRPCPlaneAddr:    grpcAddr,
+		StreamPlaneAddr:  streamAddr,
 		DefaultSpace:     "default",
 		TrafficTTL:       trafficTTL,
 		TokenTTL:         tokenTTL,

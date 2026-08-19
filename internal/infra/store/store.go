@@ -127,6 +127,13 @@ func openAndMigrate(ctx context.Context, path string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	// schema.sql creates what is missing; applyAddedColumns brings a file
+	// that already had a table up to that table's current shape, which
+	// CREATE TABLE IF NOT EXISTS cannot do (see migrate.go).
+	if err := applyAddedColumns(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
 	return db, nil
 }
 

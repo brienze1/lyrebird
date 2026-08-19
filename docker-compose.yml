@@ -6,11 +6,16 @@ services:
       - "8080:8080" # data plane — never authed
       - "9090:9090" # control plane — MCP + Admin REST + health
       - "50051:50051" # plaintext-gRPC data plane — never authed (opt-in via LYREBIRD_GRPC_PORT)
+      - "7070:7070" # byte-stream data plane — never authed (opt-in via LYREBIRD_STREAM_PORT)
     environment:
       LYREBIRD_DEFAULT_SPACE: default
       # Opt-in generic plaintext-gRPC data plane (KMS/Pub/Sub etc. via recipes).
       # Remove to disable; nothing binds on the gRPC port when unset.
       LYREBIRD_GRPC_PORT: "50051"
+      # Opt-in generic byte-stream data plane, for peripherals that speak
+      # framed bytes rather than HTTP or gRPC. Remove to disable; nothing
+      # binds on the stream port when unset.
+      LYREBIRD_STREAM_PORT: "7070"
     volumes:
       - ./config:/config:ro
       - lyrebird-data:/data

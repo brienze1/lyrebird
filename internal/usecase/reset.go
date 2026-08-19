@@ -16,14 +16,21 @@ import (
 // Principle III's disposability discipline make that an acceptable,
 // documented trade-off rather than a bug to fix here.
 type Reset struct {
-	mocks    MockRepo
-	traffic  TrafficRepo
-	scenario ScenarioStateRepo
+	mocks     MockRepo
+	traffic   TrafficRepo
+	scenario  ScenarioStateRepo
+	endpoints EndpointRepo
+	registry  ConnectionRegistry
 }
 
 // NewReset builds a Reset use case.
-func NewReset(mocks MockRepo, traffic TrafficRepo, scenario ScenarioStateRepo) *Reset {
-	return &Reset{mocks: mocks, traffic: traffic, scenario: scenario}
+//
+// endpoints and registry belong to the byte-stream data plane and are both
+// OPTIONAL: registry is nil whenever LYREBIRD_STREAM_PORT is unset, and every
+// use of either is nil-guarded, so a Lyrebird without that plane resets
+// exactly as it did before the plane existed (003's FR-026).
+func NewReset(mocks MockRepo, traffic TrafficRepo, scenario ScenarioStateRepo, endpoints EndpointRepo, registry ConnectionRegistry) *Reset {
+	return &Reset{mocks: mocks, traffic: traffic, scenario: scenario, endpoints: endpoints, registry: registry}
 }
 
 // ResetInput carries Reset.Execute's parameters.
@@ -50,6 +57,22 @@ func (uc *Reset) Execute(ctx context.Context, in ResetInput) (ResetOutput, error
 	}
 	if err := uc.scenario.ResetAllScenarios(ctx, in.Partition); err != nil {
 		return ResetOutput{}, fmt.Errorf("usecase: reset: reset scenarios: %w", err)
+	}
+
+	// Byte-stream endpoints follow the mocks: session-created ones go,
+	// seeded ones stay (they live in memory and never reach this repo).
+	if uc.endpoints != nil {
+		if err := uc.endpoints.DeleteEndpointsByPartition(ctx, in.Partition); err != nil {
+			return ResetOutput{}, fmt.Errorf("usecase: reset: delete endpoints: %w", err)
+		}
+	}
+	// Live connections and their cadences end too (003's FR-031). Without
+	// this a stand-in would keep receiving frames from rules that no longer
+	// exist; closing makes it observe exactly what an unplugged peripheral
+	// looks like and reconnect into clean state. Done LAST, so nothing can
+	// reconnect into a half-reset space.
+	if uc.registry != nil {
+		uc.registry.CloseSpace(in.Partition)
 	}
 
 	out := ResetOutput{MocksRemoved: len(ephemeral)}

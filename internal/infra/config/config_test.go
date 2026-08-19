@@ -31,6 +31,26 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.AuthEnabled() {
 		t.Error("AuthEnabled() = true with no LYREBIRD_AUTH_KEYS set, want false")
 	}
+	if cfg.GRPCPlaneAddr != "" {
+		t.Errorf("GRPCPlaneAddr = %q with no LYREBIRD_GRPC_PORT set, want empty", cfg.GRPCPlaneAddr)
+	}
+	if cfg.StreamPlaneAddr != "" {
+		t.Errorf("StreamPlaneAddr = %q with no LYREBIRD_STREAM_PORT set, want empty", cfg.StreamPlaneAddr)
+	}
+}
+
+// TestLoadStreamPlaneAddrIsOptIn is the config half of FR-001/FR-026: the
+// byte-stream plane's address only exists once an operator names a port, and
+// naming one produces exactly the ":port" shape bootstrap binds.
+func TestLoadStreamPlaneAddrIsOptIn(t *testing.T) {
+	t.Setenv("LYREBIRD_STREAM_PORT", "7070")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if cfg.StreamPlaneAddr != ":7070" {
+		t.Errorf("StreamPlaneAddr = %q, want :7070", cfg.StreamPlaneAddr)
+	}
 }
 
 func TestLoadAuthEnabledWhenKeysSet(t *testing.T) {
