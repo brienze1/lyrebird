@@ -30,11 +30,29 @@ func (uc *ListTraffic) Execute(ctx context.Context, partition string, filter Tra
 			domain.ErrInvalidTrafficFilter)
 	}
 
-	records, err := uc.repo.ListTraffic(ctx, partition, filter)
-	if err != nil || filter.RequestBodyPath == "" {
+	if filter.RequestBodyPath == "" {
+		return uc.repo.ListTraffic(ctx, partition, filter)
+	}
+
+	// The body filter runs here, after decode, because the body is sealed in an opaque
+	// blob the store cannot read. A limit therefore cannot be left to the store: it
+	// would take the newest N rows and this filter would then throw away whichever of
+	// them belong to somebody else, reporting nothing rather than the caller's own
+	// entry. Scan unbounded, filter, then keep the newest N of what actually matched.
+	wanted := filter.Limit
+	scan := filter
+	scan.Limit = 0
+
+	records, err := uc.repo.ListTraffic(ctx, partition, scan)
+	if err != nil {
 		return records, err
 	}
-	return keepMatchingRequestBody(records, filter.RequestBodyPath, filter.RequestBodyEquals), nil
+
+	matching := keepMatchingRequestBody(records, filter.RequestBodyPath, filter.RequestBodyEquals)
+	if wanted > 0 && len(matching) > wanted {
+		matching = matching[:wanted]
+	}
+	return matching, nil
 }
 
 // keepMatchingRequestBody drops entries whose request body does not carry the
