@@ -317,7 +317,11 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	controlMux.HandleFunc("GET /__lyrebird/examples/{id}", httpadmin.GetExample)
 	controlMux.HandleFunc("GET /__lyrebird/stream/endpoints", httpadmin.ListEndpoints(c.endpointsUC))
 	controlMux.HandleFunc("POST /__lyrebird/stream/endpoints", httpadmin.CreateEndpoint(c.endpointsUC))
-	controlMux.HandleFunc("DELETE /__lyrebird/stream/endpoints/{name}", httpadmin.DeleteEndpoint(c.endpointsUC))
+	// {name...} (Go 1.22 ServeMux's trailing wildcard), not {name}: an
+	// endpoint name may itself contain "/" (a namespaced family like
+	// "cb5/spp" — usecase.validateEndpoint allows it), and a single-segment
+	// wildcard would truncate the captured name at the first slash.
+	controlMux.HandleFunc("DELETE /__lyrebird/stream/endpoints/{name...}", httpadmin.DeleteEndpoint(c.endpointsUC))
 	controlMux.HandleFunc("POST /__lyrebird/stream/emit", httpadmin.EmitFrame(c.emitFrameUC))
 	controlMux.HandleFunc("GET /__lyrebird/export", httpadmin.ExportConfig(c.exportSeedsUC))
 	controlMux.HandleFunc("POST /__lyrebird/import", httpadmin.ImportConfig(c.importSeedsUC))

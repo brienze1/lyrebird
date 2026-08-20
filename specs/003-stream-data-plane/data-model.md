@@ -11,7 +11,7 @@ A named boundary. Declared in seed config or created during a session; a stand-i
 
 | Field | Type | Rules |
 | --- | --- | --- |
-| `Name` | string | Unique within a space. What a handshake names and a rule's `match.path` targets as `/<name>`. Must not contain `/`. |
+| `Name` | string | Unique within a space. What a handshake names and a rule's `match.path` targets as `/<name>`. May contain internal `/` segments (a namespaced family, e.g. `cb5/spp`); must not start or end with `/`, contain an empty (`//`) or dot (`.`/`..`) segment, or contain whitespace. |
 | `Partition` | string | The space it belongs to. |
 | `Framing` | `Framing` | How the stream divides into frames. Exactly one variant (§2). Required. |
 | `Projection` | `*Projection` | The default field decomposition for every rule on this endpoint (§4). Optional. |
@@ -167,7 +167,11 @@ Applied by an idempotent `ALTER TABLE … ADD COLUMN` guarded by `PRAGMA table_i
 
 ## 10. Validation rules
 
-- An endpoint name must be unique within its space, non-empty, and free of `/`.
+- An endpoint name must be unique within its space, non-empty, and free of whitespace; it may
+  contain internal `/` segments but must not start or end with `/`, contain an empty (`//`)
+  segment, or contain a `.`/`..` segment (`http.ServeMux` cleans those out of the request path
+  before pattern matching, so a name containing one would be undeletable through
+  `DELETE /__lyrebird/stream/endpoints/{name...}`).
 - `framing` is required and must set exactly one variant; `length` and `prefix.width` must be
   positive; `delimiter` must be non-empty.
 - A `cadence` must have a positive interval and a non-empty frame list — an empty one is an error,

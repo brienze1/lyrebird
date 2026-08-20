@@ -91,7 +91,7 @@ in the use-case layer only (constitution Principle II).
 | --- | --- | --- |
 | Declare an endpoint | `create_endpoint` | `POST /__lyrebird/stream/endpoints` |
 | List endpoints and their occupancy | `list_endpoints` | `GET /__lyrebird/stream/endpoints` |
-| Remove an endpoint | `delete_endpoint` | `DELETE /__lyrebird/stream/endpoints/{name}` |
+| Remove an endpoint | `delete_endpoint` | `DELETE /__lyrebird/stream/endpoints/{name...}` |
 | Inject a frame | `emit_frame` | `POST /__lyrebird/stream/emit` |
 
 Rules themselves need nothing new: a stream rule is an ordinary mock, so `create_mock`,

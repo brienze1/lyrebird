@@ -171,7 +171,11 @@ func TestEndpointsCreateRejectsMalformedDeclarations(t *testing.T) {
 		in   EndpointInput
 	}{
 		{"no name", EndpointInput{Partition: "default", Framing: delimiterInput("x").Framing}},
-		{"name with a slash", delimiterInputNamed("a/b")},
+		{"name starting with a slash", delimiterInputNamed("/a")},
+		{"name ending with a slash", delimiterInputNamed("a/")},
+		{"name with a doubled slash", delimiterInputNamed("a//b")},
+		{"name with a \".\" path segment", delimiterInputNamed("cb5/./x")},
+		{"name with a \"..\" path segment", delimiterInputNamed("cb5/../evil")},
 		{"name with whitespace", delimiterInputNamed("a b")},
 		{"empty delimiter", EndpointInput{Partition: "default", Name: "x",
 			Framing: domain.Framing{Kind: domain.FramingDelimiter}}},
