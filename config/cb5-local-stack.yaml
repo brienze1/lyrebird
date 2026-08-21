@@ -35,13 +35,30 @@ endpoints:
   - name: cb5/spp
     framing: {delimiter: "\r\n"}
 
-  # The position source. Sentences arrive on a cadence; the device's UART
-  # setup writes (u-blox/$PUBX) are absorbed with no answer expected
-  # (contracts/position-sentence.md).
+  # The position source. The device's UART setup writes (u-blox/$PUBX) are
+  # absorbed with no answer expected (contracts/position-sentence.md).
+  #
+  # interval: 0ms — "immediate": the sentence below is placed on the wire
+  # and repeats, paced only by the connection's own backpressure, never by a
+  # clock (cadence.go's runCadence). This was originally seeded at 1000ms, a
+  # real-time heartbeat unrelated to the device's own substituted clock — the
+  # device's boot waits (and every scenario's clock advances) run on that
+  # substituted clock, so a wall-clock cadence made how many sentences had
+  # arrived by a given device-time window depend on how fast the harness
+  # happened to issue HTTP calls (measured: 10 fast clock-advance calls
+  # booted the device, 300 of them did not; blind 2000ms advances booted,
+  # blind 5000ms advances stalled). That is exactly what FR-027 forbids ("the
+  # clock never advances on its own... so no assertion can depend on how
+  # loaded the machine is") and exactly what
+  # contracts/peripheral-control.md's "Serve a sentence"/"Serve a sequence"
+  # already specify: bytes placed on the wire for the device's own capture
+  # loop to consume, not delivered on any schedule of the mock's own. Fixed
+  # here rather than tuned to a different interval, because no interval > 0
+  # removes the coupling — only immediate mode does.
   - name: cb5/gps
     framing: {delimiter: "\n"}
     cadence:
-      interval: 1000ms
+      interval: 0ms
       on_exhaustion: repeat_last
       frames:
         # Coordinates are cb5-e2e's own FIXTURE_LATITUDE/FIXTURE_LONGITUDE

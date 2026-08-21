@@ -33,7 +33,7 @@ type CreateEndpointIn struct {
 // as a string means an agent writes the exact same grammar here, in a mock's
 // respond body, and in emit_frame.
 type CadenceIn struct {
-	Interval     string   `json:"interval" jsonschema:"time between emissions as a duration string, e.g. 100ms"`
+	Interval     string   `json:"interval" jsonschema:"time between emissions as a duration string, e.g. 100ms; 0ms/0s means immediate — every frame queued back-to-back, paced only by the connection's own backpressure, never by a clock"`
 	OnExhaustion string   `json:"on_exhaustion,omitempty" jsonschema:"what happens once the sequence runs out: repeat_last (default), loop, or stop"`
 	Frames       []string `json:"frames" jsonschema:"frames emitted in order, one per interval; each a frame spec, e.g. [{\"text\":\"TICK,0001\"}]"`
 }

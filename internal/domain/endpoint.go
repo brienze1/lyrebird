@@ -107,9 +107,16 @@ const (
 )
 
 // Cadence declares unprompted emission: a sequence of frames pushed to a
-// connected stand-in on an interval, with nothing having arrived to provoke
-// them (FR-011). It belongs to an Endpoint, starts when a stand-in occupies
-// it, and stops when the connection ends or the space is reset.
+// connected stand-in, with nothing having arrived to provoke them (FR-011).
+// It belongs to an Endpoint, starts when a stand-in occupies it, and stops
+// when the connection ends or the space is reset.
+//
+// Interval > 0 ticks on Lyrebird's own host clock — a real-time heartbeat.
+// Interval == 0 is "immediate": every frame is queued back-to-back with no
+// wait, paced only by the connection's own backpressure, never by a clock —
+// for a source whose bytes are simply there for whoever reads them, where
+// nothing may depend on how much real time has passed since occupancy
+// (streamplane.conn.runCadence). Interval must never be negative.
 type Cadence struct {
 	Interval  time.Duration
 	Frames    [][]FramePart

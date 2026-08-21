@@ -220,8 +220,11 @@ func validateCadence(c *domain.Cadence) error {
 	if c == nil {
 		return nil
 	}
-	if c.Interval <= 0 {
-		return fmt.Errorf("%w: cadence.interval must be positive", domain.ErrInvalidMock)
+	// A zero interval is "immediate" mode (cadence.go's runCadence): every
+	// frame is queued back-to-back with no wait, paced only by the
+	// connection's own backpressure. Only a negative interval is malformed.
+	if c.Interval < 0 {
+		return fmt.Errorf("%w: cadence.interval must not be negative", domain.ErrInvalidMock)
 	}
 	// An empty frame list is an error rather than a silent no-op: a cadence
 	// that emits nothing is always a mistake, and one that quietly does
