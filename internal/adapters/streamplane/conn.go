@@ -40,6 +40,10 @@ type outbound struct {
 	// closeAfter drops the connection once this frame is written. Only the
 	// reset fault sets it, and it sets it with no bytes at all.
 	closeAfter bool
+	// result is how writeLoop reports this specific frame's write-and-record
+	// outcome back to queue, which sets it on every call — buffered by one so
+	// writeLoop's send can never block on it.
+	result chan error
 }
 
 // conn is one stand-in's live connection to one endpoint.
@@ -135,17 +139,30 @@ func (c *conn) writeLoop() {
 		case <-c.done:
 			return
 		case o := <-c.out:
+			var werr error
 			if len(o.bytes) > 0 {
 				if _, err := c.nc.Write(o.bytes); err != nil {
 					c.log.Debug("streamplane: write failed", "endpoint", c.endpoint.Name, "err", err)
-					c.close()
-					return
+					werr = err
 				}
 			}
-			// Recorded from inside the writer so the traffic log's order
-			// matches the wire's order, not the order handlers happened to
-			// finish in.
-			c.handler.recordOutbound(context.WithoutCancel(context.Background()), c, o)
+			if werr == nil {
+				// Recorded from inside the writer so the traffic log's order
+				// matches the wire's order, not the order handlers happened to
+				// finish in.
+				c.handler.recordOutbound(context.WithoutCancel(context.Background()), c, o)
+			}
+			// Reported before closeAfter/the write-failure path tears the
+			// connection down, so a queueAndWait caller learns the outcome
+			// exactly once, whichever it is. Nil for every fire-and-forget
+			// queue() caller (an answer, a cadence tick) — see queueAndWait.
+			if o.result != nil {
+				o.result <- werr
+			}
+			if werr != nil {
+				c.close()
+				return
+			}
 			if o.closeAfter {
 				c.close()
 				return
@@ -154,9 +171,18 @@ func (c *conn) writeLoop() {
 	}
 }
 
-// queue hands a built frame to the writer. It reports an error rather than
-// blocking forever when the connection is gone, so a caller (an injection,
-// most importantly) is told plainly instead of hanging.
+// queue hands a built frame to the writer and returns once it is accepted
+// onto the outbound channel — NOT once it has actually reached the wire.
+// This is what an answer to an inbound frame and a cadence tick both want:
+// both run inline on a goroutine with other work still to do on this
+// connection (the read loop, the next tick), and waiting for the physical
+// write to complete would re-couple exactly what the channel's buffering
+// exists to decouple — a slow reader stalling the connection's own read
+// loop, not just its writer. See queueAndWait for the call site that
+// deliberately gives up that decoupling for a stronger guarantee.
+//
+// It reports an error rather than blocking forever when the connection is
+// gone, so a caller is told plainly instead of hanging.
 func (c *conn) queue(ctx context.Context, o outbound) error {
 	// Checked BEFORE the select, not only inside it. c.out is buffered, so on
 	// an already-closed connection both cases are ready at once and Go picks
@@ -179,12 +205,62 @@ func (c *conn) queue(ctx context.Context, o outbound) error {
 	}
 }
 
+// queueAndWait is queue, plus blocking until this specific frame has
+// actually been written to the wire and recorded — not merely accepted onto
+// the outbound channel for eventual delivery by writeLoop. That is the
+// control-plane contract an unprompted injection makes to its HTTP caller
+// (and to cb5-e2e's harness, which reads a served frame back with no retry
+// budget of its own on the strength of it — test/integration/steps/
+// stream_steps_test.go's pollUtil comment: "the plane records a frame before
+// the step that caused it returns"): by the time this call returns, whatever
+// it queued is already observable on GET /traffic.
+//
+// Only emit() uses this. An answer to an inbound frame and a cadence tick
+// deliberately keep queue's weaker, non-blocking guarantee instead — see
+// queue's own comment for why re-coupling them to the physical write would
+// be a regression, not a fix.
+func (c *conn) queueAndWait(ctx context.Context, o outbound) error {
+	select {
+	case <-c.done:
+		return c.disconnectedErr()
+	default:
+	}
+
+	result := make(chan error, 1)
+	o.result = result
+
+	select {
+	case <-c.done:
+		return c.disconnectedErr()
+	case <-ctx.Done():
+		return ctx.Err()
+	case c.out <- o:
+	}
+
+	// Waits for writeLoop to actually process THIS frame — the whole point:
+	// queuing it is not the same as it being on the wire yet. If the
+	// connection closes with the frame still sitting unprocessed in c.out
+	// (writeLoop picked the done case over draining the backlog), that is
+	// reported the same way an outright rejection would be, never as a
+	// silent success.
+	select {
+	case err := <-result:
+		return err
+	case <-c.done:
+		return c.disconnectedErr()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (c *conn) disconnectedErr() error {
 	return fmt.Errorf("%w: the stand-in on endpoint %q has disconnected", domain.ErrNotFound, c.endpoint.Name)
 }
 
-// emit builds and queues an unprompted frame from a frame spec — the path
-// both control-plane injection and the cadence take (FR-012, FR-011).
+// emit builds an unprompted frame from a frame spec and queues it through
+// queueAndWait — the control-plane injection path (FR-012), which is the one
+// caller that needs the frame confirmed written and recorded, not merely
+// accepted, before it hands control back (see queueAndWait).
 func (c *conn) emit(ctx context.Context, frameSpecJSON []byte) error {
 	spec, err := parseFrameSpec(frameSpecJSON)
 	if err != nil {
@@ -196,7 +272,7 @@ func (c *conn) emit(ctx context.Context, frameSpecJSON []byte) error {
 	if err != nil {
 		return err
 	}
-	return c.queue(ctx, outbound{
+	return c.queueAndWait(ctx, outbound{
 		bytes:     bytes,
 		direction: domain.StreamDirectionEmit,
 		decision:  domain.DecisionMocked,

@@ -48,6 +48,73 @@ func newTestConn(t *testing.T) (*conn, net.Conn) {
 	return c, client
 }
 
+// spyRecorder counts Execute calls, safe for concurrent access — the exact
+// shape TestConnEmitIsRecordedBeforeItReturns needs to observe recordOutbound
+// happening (or not) from the caller's own goroutine.
+type spyRecorder struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (r *spyRecorder) Execute(_ context.Context, _ usecase.RecordTrafficInput) (domain.TrafficRecord, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	return domain.TrafficRecord{}, nil
+}
+
+func (r *spyRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+// cb5-e2e's own harness assumes a synchronous control plane: pollUtil's
+// "ms <= 0 means one attempt" branch is only correct because "the plane
+// records a frame before the step that caused it returns" (test/integration/
+// steps/stream_steps_test.go, cb5-e2e). Reading the frame straight back after
+// emit() must therefore never race the write — this proves emit() itself
+// does not hand control back until the frame it queued is both on the wire
+// and in the traffic log, not merely accepted onto the outbound channel for
+// eventual delivery by writeLoop.
+func TestConnEmitIsRecordedBeforeItReturns(t *testing.T) {
+	server, client := net.Pipe()
+	rec := &spyRecorder{}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h := &Handler{record: rec, clock: systemClock{}, log: log}
+	endpoint := domain.Endpoint{Name: "widget", Partition: "default", Framing: delimiterFraming()}
+	c := newConn(server, "default", endpoint, handshake{}, h, NewRegistry(), log)
+	t.Cleanup(func() {
+		c.close()
+		_ = client.Close()
+	})
+
+	c.wg.Add(1)
+	go c.writeLoop()
+
+	// Drains the socket concurrently so net.Pipe's synchronous, unbuffered
+	// Write (which blocks until something Reads) is not itself the thing
+	// under test — only the ordering between emit() returning and the
+	// recorder being called is.
+	go func() {
+		buf := make([]byte, 64)
+		for {
+			if _, err := client.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	if err := c.emit(context.Background(), []byte(`[{"text":"X"}]`)); err != nil {
+		t.Fatalf("emit: %v", err)
+	}
+
+	if got := rec.count(); got != 1 {
+		t.Fatalf("recorder saw %d call(s) immediately after emit() returned, want 1 — "+
+			"the traffic record was not yet written when the caller regained control", got)
+	}
+}
+
 // FR-033/SC-006: every writer goes through one goroutine, so concurrent
 // emissions can never be spliced into each other and repeated runs deliver
 // the frames in the order they were queued.
