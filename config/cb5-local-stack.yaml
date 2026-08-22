@@ -54,11 +54,28 @@ endpoints:
   # already specify: bytes placed on the wire for the device's own capture
   # loop to consume, not delivered on any schedule of the mock's own. Fixed
   # here rather than tuned to a different interval, because no interval > 0
-  # removes the coupling — only immediate mode does.
+  # removed the coupling — only immediate mode did.
+  #
+  # 2026-08-22: that reasoning was correct WHEN WRITTEN and is now superseded.
+  # cb5-service 6b9e151 closed the same coupling from the other side, by making
+  # advanceDeviceClock() cost real time in proportion to the advance — so the
+  # device clock can no longer outrun the wire, whatever this interval is.
+  #
+  # Immediate mode then turned out to be actively harmful: measured on the live
+  # stack it delivers 780 sentences/sec (1,403,419 entries in 30 min, 22.4% of
+  # inter-arrival gaps under 0.5ms). At that rate the device NEVER idles, so
+  # deviceIsSpinning() (src/fake/time-fake.cpp) cannot distinguish "parked in
+  # Timer::wait()" from "consuming an unthrottled byte stream" — both drive
+  # millis() identically — and release_next_wait() is starved. Boot then fails
+  # with zero display writes.
+  #
+  # 2ms is what every native reboot fixture uses and demonstrably works. It is
+  # also far closer to the hardware being substituted: a u-blox NEO-6M at 10Hz
+  # emits TEN sentences a second, not 780.
   - name: cb5/gps
     framing: {delimiter: "\n"}
     cadence:
-      interval: 0ms
+      interval: 2ms
       on_exhaustion: repeat_last
       frames:
         # Coordinates are cb5-e2e's own FIXTURE_LATITUDE/FIXTURE_LONGITUDE
