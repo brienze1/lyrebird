@@ -9,11 +9,22 @@ exactly these globals — nothing else (no filesystem, network, or environment a
   `req.body` reflects only the first `LYREBIRD_BODY_CAP_BYTES` (default 1 MiB) of the request body —
   a body larger than the cap may parse as raw text instead of JSON, or be silently truncated
   mid-token. Don't rely on `req.body` for bodies that may exceed the cap.
+- `req.rawBody` — the same body as an unparsed string, exactly as it arrived (`""` when there is no
+  body). Use it whenever the sender's own bytes matter: re-encoding `req.body` does **not** reproduce
+  them, because parsing to an object and back loses key order and whitespace. Signing a
+  round-tripped body yields a digest that never matches the sender's, and fails as an authentication
+  error rather than as a visible bug. Subject to the same byte cap as `req.body`, so a digest over a
+  body that exceeded the cap is a digest over the truncated prefix.
 - `uuid()` — returns a random v4 UUID string.
 - `now()` — returns the current time as an ISO-8601 string.
 - `faker` — a small set of realistic fake-data generators: `faker.name()`, `faker.email()`.
 - `jsonpath(value, path)` — evaluates a JSONPath-style expression against a value and returns the
   match (or `undefined` if not found). Same path dialect as a mock's declarative `body` conditions.
+- `hmac(algorithm, key, data)` — the keyed digest as lowercase hex. `algorithm` is `sha1`, `sha256`
+  or `sha512`; anything else throws, and the mock fails safe rather than passing `undefined` off as a
+  signature. This is what makes a webhook signature reproducible in a script:
+  `({signature: "sha256=" + hmac("sha256", "s3cr3t", req.rawBody)})`. It computes and nothing more —
+  no filesystem, network or environment access comes with it.
 
 ## Authoring convention
 
@@ -24,6 +35,9 @@ parentheses so they aren't parsed as a block: `({field: req.body.field})`, not
 
 - `match_src` — truthy means the mock matches (ANDed with any declarative `match` conditions on the
   same mock). Example: `req.method == "GET" && req.query.debug == "1"`.
+A `transform_response` script additionally gets `resp` — `resp.status`, `resp.headers`, `resp.body`
+and `resp.rawBody`, following the same parsed/unparsed split as `req`.
+
 - `respond_src` — its value becomes the response body: a returned string is used verbatim; anything
   else (object, array, number, boolean, null) is JSON-encoded. Status/headers still come from the
   mock's declared `action.respond`. Example: `({echoed: req.body.field})`.

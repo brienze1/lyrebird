@@ -153,7 +153,8 @@ Both are adapters over the same core. MCP is the headline; REST exists for curl/
 - **Debugging:** `match_test` — dry-run a sample request → which mock fires, which matchers
   passed/failed, and the response. `inspect_requests` — recent requests, to see why a mock missed.
 - **Scripting help:** `script_sandbox_api` — documents the JS globals available (`req`, helpers like
-  `uuid()`, `now()`, `faker`, `jsonpath()`), so the agent writes valid scripts first try.
+  `uuid()`, `now()`, `faker`, `jsonpath()`, `hmac()`), so the agent writes valid scripts first
+  try.
 - **Recipes (knowledge, not code):** `list_examples`, `get_example` — a curated library teaching the
   AI how to mock common APIs/SDKs as plain HTTP: AWS (SNS query→XML, DynamoDB `X-Amz-Target` header,
   Secrets Manager, S3 REST-XML), GCP (Pub/Sub, GCS, KMS), plus how to point an SDK at lyrebird

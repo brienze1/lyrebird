@@ -22,7 +22,7 @@ contracts/admin-rest.md — the one route explicitly exempt from the auth gate) 
 | Tool | Input | Output | Requirement |
 |------|-------|--------|-------------|
 | `lyrebird_guide` | — | Concepts, composition, ≥1 minimal valid mock example. | FR-019 |
-| `script_sandbox_api` | — | Docs of injected JS globals (`req`, `uuid()`, `now()`, `faker`, `jsonpath()`). | FR-017 |
+| `script_sandbox_api` | — | Docs of injected JS globals (`req`, `uuid()`, `now()`, `faker`, `jsonpath()`, `hmac()`). | FR-017 |
 | `list_examples` | `{ query? }` | Recipe index (AWS/GCP/generic as plain HTTP). Content only, no `mock` field per entry. | FR-022 |
 | `get_example` | `{ id }` | One recipe → ready-to-adapt `create_mock` payload (`mock` is absent/null for guidance-only entries, e.g. the endpoint-injection how-to). | FR-022 |
 
