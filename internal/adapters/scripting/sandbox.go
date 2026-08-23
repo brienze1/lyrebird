@@ -22,16 +22,24 @@ func newRuntime() *goja.Runtime {
 	vm := goja.New()
 	vm.SetMaxCallStackSize(maxCallStackSize)
 	// Set's error return is only non-nil for a value goja can't convert at
-	// all; none of these four literal/closure values can ever hit that.
+	// all; none of these literal/closure values can ever hit that.
 	_ = vm.Set("uuid", uuid.NewString)
 	_ = vm.Set("now", func() string { return time.Now().UTC().Format(time.RFC3339) })
 	_ = vm.Set("faker", fakerAPI())
 	_ = vm.Set("jsonpath", newJSONPath(vm))
+	_ = vm.Set("hmac", newHMAC())
 	return vm
 }
 
 // reqToJS builds the per-invocation "req" global exposed to scripts:
-// method/path/headers/query/body.
+// method/path/headers/query/body/rawBody.
+//
+// rawBody is the body exactly as it arrived, before parseBody turns JSON into
+// an object. Anything that has to reproduce the sender's bytes needs it:
+// re-serializing req.body cannot, because unmarshalling to a Go map and back
+// loses key order and whitespace. A signature computed over the round-tripped
+// form is wrong every time, and wrong in a way that surfaces as an
+// authentication failure somewhere else entirely.
 func reqToJS(in usecase.MatchInput) map[string]any {
 	return map[string]any{
 		"method":  in.Method,
@@ -39,6 +47,7 @@ func reqToJS(in usecase.MatchInput) map[string]any {
 		"headers": firstOrSlice(in.Header),
 		"query":   firstOrSlice(in.Query),
 		"body":    parseBody(in.Body),
+		"rawBody": string(in.Body),
 	}
 }
 
@@ -50,6 +59,7 @@ func respToJS(in usecase.TransformInput) map[string]any {
 		"status":  in.Status,
 		"headers": firstOrSlice(in.Headers),
 		"body":    parseBody(in.Body),
+		"rawBody": string(in.Body),
 	}
 }
 
