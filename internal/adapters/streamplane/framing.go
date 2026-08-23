@@ -119,21 +119,37 @@ func (fr *frameReader) dropPending() bool {
 		fr.discard -= n
 		return fr.discard == 0
 	}
-	if fr.resync {
+	for fr.resync {
 		delim := fr.framing.Delimiter
-		if i := bytes.Index(fr.buf, delim); i >= 0 {
-			fr.buf = fr.buf[i+len(delim):]
+		i := bytes.Index(fr.buf, delim)
+		if i < 0 {
+			// Keep the last len(delim)-1 bytes: a delimiter split across two
+			// reads would otherwise be dropped and the stream never resync.
+			if keep := len(delim) - 1; keep > 0 && len(fr.buf) > keep {
+				fr.buf = fr.buf[len(fr.buf)-keep:]
+			} else if keep <= 0 {
+				fr.buf = fr.buf[:0]
+			}
+			return false
+		}
+		if i > 0 {
+			// A delimiter with payload ahead of it is NOT the abandoned
+			// run's tail catching up: everything buffered was discarded the
+			// moment the run was abandoned (fr.buf reset to empty), so any
+			// payload accumulated since then is bytes we have never yet
+			// evaluated — indistinguishable from the start of a fresh
+			// connection. Leave it for normal (non-resync) framing to serve,
+			// which is exactly how a frame this size would be served if
+			// resync had never triggered (FR-028: a complete frame is always
+			// served whole once a delimiter is found, cap or no cap).
 			fr.resync = false
 			return true
 		}
-		// Keep the last len(delim)-1 bytes: a delimiter split across two
-		// reads would otherwise be dropped and the stream never resync.
-		if keep := len(delim) - 1; keep > 0 && len(fr.buf) > keep {
-			fr.buf = fr.buf[len(fr.buf)-keep:]
-		} else if keep <= 0 {
-			fr.buf = fr.buf[:0]
-		}
-		return false
+		// i == 0: a bare delimiter with nothing ahead of it is the
+		// abandoned run's own tail finally catching up — discard it and
+		// keep looking; a genuinely still-unterminated run can shed several
+		// of these before its real content resumes.
+		fr.buf = fr.buf[i+len(delim):]
 	}
 	return true
 }

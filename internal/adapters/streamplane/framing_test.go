@@ -87,6 +87,39 @@ func TestFrameReaderAbandonsAnUnterminatedRunAndResynchronises(t *testing.T) {
 	}
 }
 
+// FR-034, the no-separator case (stream_data_plane.feature:240 "Bytes that
+// never complete a frame are abandoned and the next frame is served"): the
+// abandoned run has NO terminator of its own — the very next bytes on the
+// wire are an unrelated, well-formed frame with nothing separating it from
+// the abandoned run. Unlike the test above (which writes an explicit leading
+// "\r\n" to mark where the garbage ends), here the recovery delimiter IS the
+// good frame's own terminator, and it must be served whole, not swallowed as
+// presumed garbage tail — otherwise the outcome depends on whether the
+// stand-in's two writes happen to land in one Read or two, which is exactly
+// the flake this test pins down.
+func TestFrameReaderResyncServesAnUnseparatedFollowingFrame(t *testing.T) {
+	pr, pw := io.Pipe()
+	fr := newFrameReader(pr, delimiterFraming(), 32)
+
+	go func() {
+		_, _ = pw.Write([]byte(strings.Repeat("x", 200)))
+		_, _ = pw.Write([]byte("GOOD\r\n"))
+		_ = pw.Close()
+	}()
+
+	if _, err := fr.Next(); !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("Next() over the cap = %v, want ErrFrameTooLarge", err)
+	}
+
+	got, err := fr.Next()
+	if err != nil {
+		t.Fatalf("Next() after an oversized run with no separator: %v", err)
+	}
+	if string(got) != "GOOD\r\n" {
+		t.Errorf("frame after resync = %q, want %q", got, "GOOD\r\n")
+	}
+}
+
 // FR-028: a frame LARGER than the recorded-body cap is still served in full.
 // The cap bounds what the traffic log stores and how long an unterminated run
 // may accumulate — it is not a limit on how big a legitimate frame may be.
