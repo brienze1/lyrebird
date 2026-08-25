@@ -276,3 +276,71 @@ func TestShutdownDrainsBothServersConcurrently(t *testing.T) {
 
 	<-reqDone
 }
+
+// TestStreamPlaneIsOptIn is 003's FR-026/SC-005 asserted at the seam that
+// decides it: with LYREBIRD_STREAM_PORT unset (an empty cfg.StreamPlaneAddr),
+// nothing binds, no address exists, and the two planes Lyrebird already
+// served are untouched. Setting it binds a real listener and nothing else
+// changes.
+//
+// Worth its own test rather than leaving it to the feature suite: "the
+// feature is absent when not configured" is the one property a scenario
+// cannot easily prove, because a scenario that does not enable the plane also
+// does not look for it.
+func TestStreamPlaneIsOptIn(t *testing.T) {
+	newCfg := func(dir, streamAddr string) config.Config {
+		return config.Config{
+			DataPlaneAddr:    "127.0.0.1:0",
+			ControlPlaneAddr: "127.0.0.1:0",
+			StreamPlaneAddr:  streamAddr,
+			DefaultSpace:     "default",
+			DBPath:           filepath.Join(dir, "lyrebird.db"),
+			SeedDir:          filepath.Join(dir, "config"),
+			GCInterval:       time.Hour,
+			TrafficTTL:       time.Hour,
+			BodyCapBytes:     1 << 20,
+			ScriptTimeout:    100 * time.Millisecond,
+		}
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	t.Run("unset binds nothing", func(t *testing.T) {
+		ctx := context.Background()
+		app, err := Run(ctx, newCfg(t.TempDir(), ""), log)
+		if err != nil {
+			t.Fatalf("Run(): %v", err)
+		}
+		t.Cleanup(func() { _ = app.Shutdown(ctx) })
+
+		if got := app.StreamAddr(); got != "" {
+			t.Errorf("StreamAddr() = %q with no stream port configured, want empty", got)
+		}
+		if app.streamServer != nil || app.streamListener != nil {
+			t.Error("a stream server/listener exists with no stream port configured, want neither")
+		}
+		// The planes that were already there are unaffected either way.
+		if app.DataAddr() == "" || app.ControlAddr() == "" {
+			t.Error("the HTTP data/control planes did not bind, want both unchanged")
+		}
+	})
+
+	t.Run("set binds a reachable listener", func(t *testing.T) {
+		ctx := context.Background()
+		app, err := Run(ctx, newCfg(t.TempDir(), "127.0.0.1:0"), log)
+		if err != nil {
+			t.Fatalf("Run(): %v", err)
+		}
+		t.Cleanup(func() { _ = app.Shutdown(ctx) })
+
+		addr := app.StreamAddr()
+		if addr == "" {
+			t.Fatal("StreamAddr() is empty with a stream port configured, want a bound address")
+		}
+		dialer := &net.Dialer{Timeout: 2 * time.Second}
+		conn, err := dialer.DialContext(ctx, "tcp", addr)
+		if err != nil {
+			t.Fatalf("dial %s: %v", addr, err)
+		}
+		_ = conn.Close()
+	})
+}

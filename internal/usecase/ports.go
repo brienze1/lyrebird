@@ -266,3 +266,65 @@ func (e *ScriptError) Error() string {
 }
 
 func (e *ScriptError) Unwrap() error { return e.Err }
+
+// BodyProjector derives the MatchInput.Body a given candidate mock should be
+// evaluated against, for a data plane where the body is not one fixed
+// document but depends on the rule doing the matching — today, the
+// byte-stream plane, where a rule may declare its own projection of the same
+// frame's bytes (003's FR-006).
+//
+// It is a port for the usual reason: the projection grammar lives in
+// internal/adapters/streamplane, which usecase cannot import. Consumed only
+// by MatchRequest.ExecuteProjected; every other plane passes one body and
+// uses Execute.
+type BodyProjector interface {
+	// ProjectFor returns the body to evaluate m against. An error means this
+	// mock's projection cannot read these bytes, which ExecuteProjected
+	// treats as "this candidate did not match" rather than as a failure of
+	// the whole frame.
+	ProjectFor(m domain.Mock) ([]byte, error)
+}
+
+// EndpointRepo persists ephemeral (session-created) byte-stream endpoints.
+// Seeded endpoints never pass through it — like seeded mocks they live only
+// in memory (constitution Principle III). Method names are entity-qualified
+// for the same reason MockRepo's are: one concrete *store.Store satisfies
+// every port in this file, and Go has no method overloading.
+type EndpointRepo interface {
+	CreateEndpoint(ctx context.Context, e domain.Endpoint) error
+	GetEndpoint(ctx context.Context, partition, name string) (domain.Endpoint, error)
+	ListEndpoints(ctx context.Context, partition string) ([]domain.Endpoint, error)
+	DeleteEndpoint(ctx context.Context, partition, name string) error
+	DeleteEndpointsByPartition(ctx context.Context, partition string) error
+}
+
+// SeededEndpointSource returns the seeded (in-memory, reset-immune)
+// byte-stream endpoints for a partition, mirroring SeededMockSource.
+// Implemented directly by seeds.Seeds.
+type SeededEndpointSource interface {
+	SeededEndpoints(partition string) []domain.Endpoint
+}
+
+// ConnectionRegistry is the live, in-memory view of which stand-ins are
+// currently connected to which byte-stream endpoints. It is deliberately not
+// a repository: occupancy is runtime state that dies with the process, never
+// something persisted (data-model.md §1).
+//
+// Every consumer holds it as an OPTIONAL collaborator — nil whenever
+// LYREBIRD_STREAM_PORT is unset — so a Lyrebird without the byte-stream plane
+// carries no behaviour change at all (FR-026). Callers must nil-check.
+type ConnectionRegistry interface {
+	// Emit queues frameSpec (the JSON frame declaration) for delivery to the
+	// stand-in holding this endpoint, through that connection's single
+	// writer so it can never interleave with an answer or a cadence tick
+	// (FR-033). It reports domain.ErrNotFound when nothing holds the
+	// endpoint, which the caller surfaces plainly rather than succeeding
+	// silently (FR-015).
+	Emit(ctx context.Context, partition, endpoint string, frameSpec []byte) error
+	// CloseSpace stops every cadence and closes every connection in the
+	// partition, so nothing survives a reset by being mid-stream (FR-031).
+	CloseSpace(partition string)
+	// Occupied reports whether a stand-in currently holds this endpoint,
+	// for the endpoint listing.
+	Occupied(partition, endpoint string) bool
+}

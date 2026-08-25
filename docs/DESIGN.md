@@ -299,6 +299,59 @@ per-service code — GCP KMS, Pub/Sub, etc. are delivered as recipes (see `list_
 `respond` actions are served (proxy/fault are HTTP-plane only). gRPC mocks are ordinary
 seeded/ephemeral mocks and honor reset/GC exactly like HTTP mocks. Response field-spec grammar and
 field mappings: see `specs/002-grpc-data-plane/`.
+
+### Byte-stream data plane (generic, opt-in)
+
+Set `LYREBIRD_STREAM_PORT` (e.g. `7070`) to serve a **third** data plane, for peripherals that speak
+neither HTTP nor gRPC but **framed bytes** — a serial line, a serial-profile radio link, a pin-level
+control channel. Unset, nothing binds and Lyrebird behaves exactly as it does without the feature.
+
+**Handshake.** A stand-in dials TCP and sends one CRLF-terminated line,
+`LYREBIRD/1 <endpoint> [space=<name>] [k=v ...]`. The server answers `OK` and starts streaming, or
+answers one `ERR …` line naming the problem and closes: an unrecognised endpoint, an endpoint
+another stand-in already holds, a malformed line, or a handshake that never arrived. `space=` is the
+space selection the gRPC plane could not have, since a gRPC client cannot carry Lyrebird's space
+header; every other `k=v` becomes a match header.
+
+**Framing and the envelope.** An **endpoint** declares where a frame ends (a delimiter, a fixed
+length, or a length prefix) — once, so every rule on it reads the stream the same way. Each frame is
+projected into a JSON envelope the existing JSONPath body matchers address: `$.len`, `$.hex` and
+`$.text` are always present, with `$.fields.N` and `$.at.<name>` added by a declared projection. The
+envelope is built from the frame's **payload** (framing overhead stripped) while the traffic log
+records the **exact bytes**, so a rule matches what its author wrote and the log shows what crossed
+the wire. The projection is declared on the endpoint as a default and overridable per rule, served
+by `usecase.MatchRequest.ExecuteProjected` — which keeps mock precedence, scenario exhaustion and
+script gating in the use-case layer while letting the adapter supply each candidate's own body.
+`$.text` is decoded latin-1, so every byte round-trips rather than collapsing to U+FFFD.
+
+**No protocol code, ever.** Framing, projection and answer-building are declarative grammars. There
+is no decoder for any real protocol in `internal/adapters/streamplane`, and adding one would be a
+constitution Principle I violation to be redesigned as configuration — the same rule the gRPC plane
+follows by parsing protobuf at the wire level.
+
+**One writer per connection.** Answers, cadence ticks and control-plane injections all reach the
+socket through a single channel-fed goroutine, so a frame is never spliced and the order things were
+emitted in is the order they arrive in.
+
+**Origination** is this plane's one genuinely new capability: an endpoint may declare a `cadence`
+(a sequence and an interval, with `repeat_last` / `loop` / `stop` on exhaustion) and `emit_frame`
+pushes a chosen frame into a live connection mid-scenario. Both are recorded as `EMIT`, distinct
+from an inbound `IN` and an answering `OUT`.
+
+**Faults** map onto the wire: `delay` is a slow line, `reset` drops the connection, `timeout` is
+silence (distinguishable from an unmatched frame only by the recorded decision — which is why both
+are recorded), `malformed` writes bytes without the framing terminator.
+
+**`proxy` is not served.** The other planes forward to a real upstream; here there is none by
+design, since a stand-in exists precisely so that no device is attached. Such a rule is rejected
+when it is *created*, so the limitation surfaces where its author can act on it rather than as a
+mysteriously silent frame at serve time. Hardware-in-the-loop is deferred, exactly as `002` deferred
+proxy and fault on the gRPC plane.
+
+Stream rules are ordinary mocks (`match.method: FRAME`, `match.path: /<endpoint>`), so spaces,
+seeds, `reset`, TTL/GC, scripting — **including respond scripts, which the gRPC plane lacks** —
+`promote_traffic`, `metrics` and `export_config` all apply unchanged. Full grammar and contract:
+`specs/003-stream-data-plane/`.
 - Ship a `docker-compose.yml` example (local) and a bare `docker run` one-liner; HML = same image as
   a long-lived service behind the NLB, agents connect to its MCP HTTP endpoint.
 

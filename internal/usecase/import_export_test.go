@@ -15,7 +15,7 @@ func TestExportSeeds_ReturnsUpstreamsAndOnlyEphemeralMocks(t *testing.T) {
 	}
 
 	upstreamRepo := &fakeUpstreamRepo{set: []domain.Upstream{{Partition: "default", MatchHost: "example.local", TargetURL: "https://example.local"}}}
-	uc := NewExportSeeds(NewListUpstreams(upstreamRepo, seeds), mockCRUD)
+	uc := NewExportSeeds(NewListUpstreams(upstreamRepo, seeds), mockCRUD, nil)
 
 	bundle, err := uc.Execute(context.Background(), "default")
 	if err != nil {
@@ -36,7 +36,7 @@ func TestExportSeeds_ExcludesSeededUpstreams(t *testing.T) {
 	mockCRUD, seeds := newCRUD()
 	seeds.upstreams = []domain.Upstream{{Partition: "default", MatchHost: "seeded.example", TargetURL: "https://seeded.example"}}
 	upstreamRepo := &fakeUpstreamRepo{set: []domain.Upstream{{Partition: "default", MatchHost: "runtime.example", TargetURL: "https://runtime.example"}}}
-	uc := NewExportSeeds(NewListUpstreams(upstreamRepo, seeds), mockCRUD)
+	uc := NewExportSeeds(NewListUpstreams(upstreamRepo, seeds), mockCRUD, nil)
 
 	bundle, err := uc.Execute(context.Background(), "default")
 	if err != nil {
@@ -50,11 +50,12 @@ func TestExportSeeds_ExcludesSeededUpstreams(t *testing.T) {
 func TestImportSeeds_CreatesEachUpstreamAndMock(t *testing.T) {
 	mockCRUD, _ := newCRUD()
 	upstreamRepo := &fakeUpstreamRepo{}
-	uc := NewImportSeeds(NewSetUpstream(upstreamRepo), mockCRUD)
+	uc := NewImportSeeds(NewSetUpstream(upstreamRepo), mockCRUD, nil)
 
 	result, err := uc.Execute(context.Background(), "default",
 		[]domain.Upstream{{MatchHost: "example.local", TargetURL: "https://example.local"}},
 		[]MockInput{{Name: "imported", Action: respondAction(200)}},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("Execute(): %v", err)
@@ -79,9 +80,9 @@ func TestImportSeeds_IsAdditiveNotDestructive(t *testing.T) {
 	if _, err := mockCRUD.Create(context.Background(), MockInput{Partition: "default", Name: "pre-existing", Action: respondAction(200)}); err != nil {
 		t.Fatalf("Create(): %v", err)
 	}
-	uc := NewImportSeeds(NewSetUpstream(&fakeUpstreamRepo{}), mockCRUD)
+	uc := NewImportSeeds(NewSetUpstream(&fakeUpstreamRepo{}), mockCRUD, nil)
 
-	if _, err := uc.Execute(context.Background(), "default", nil, []MockInput{{Name: "imported", Action: respondAction(200)}}); err != nil {
+	if _, err := uc.Execute(context.Background(), "default", nil, []MockInput{{Name: "imported", Action: respondAction(200)}}, nil); err != nil {
 		t.Fatalf("Execute(): %v", err)
 	}
 	list, err := mockCRUD.List(context.Background(), "default", "")
@@ -95,14 +96,14 @@ func TestImportSeeds_IsAdditiveNotDestructive(t *testing.T) {
 
 func TestImportSeeds_StopsAtTheFirstFailingMock(t *testing.T) {
 	mockCRUD, _ := newCRUD()
-	uc := NewImportSeeds(NewSetUpstream(&fakeUpstreamRepo{}), mockCRUD)
+	uc := NewImportSeeds(NewSetUpstream(&fakeUpstreamRepo{}), mockCRUD, nil)
 	invalidMock := MockInput{Name: "", Action: respondAction(200)}
 
 	result, err := uc.Execute(context.Background(), "default", nil, []MockInput{
 		{Name: "valid", Action: respondAction(200)},
 		invalidMock,
 		{Name: "unreachable", Action: respondAction(200)},
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("Execute() with an invalid mock in the bundle succeeded, want an error")
 	}

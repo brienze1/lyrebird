@@ -25,7 +25,9 @@ CREATE TABLE IF NOT EXISTS ephemeral_mocks (
     match_blob    BLOB NOT NULL,
     script_blob   BLOB,
     action_blob   BLOB NOT NULL,
-    scenario_blob BLOB
+    scenario_blob BLOB,
+    projection_blob BLOB,
+    from_capture  INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_ephemeral_mocks_partition ON ephemeral_mocks("partition");
 CREATE INDEX IF NOT EXISTS idx_ephemeral_mocks_expires
@@ -56,4 +58,14 @@ CREATE TABLE IF NOT EXISTS scenario_state (
     idx         INTEGER NOT NULL DEFAULT 0,
     updated_at  INTEGER NOT NULL,
     PRIMARY KEY ("partition", mock_id)
+);
+
+CREATE TABLE IF NOT EXISTS ephemeral_endpoints (
+    "partition"     TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    created_at      INTEGER NOT NULL,
+    framing_blob    BLOB NOT NULL,
+    projection_blob BLOB,
+    cadence_blob    BLOB,
+    PRIMARY KEY ("partition", name)
 );

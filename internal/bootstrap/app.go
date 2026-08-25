@@ -24,6 +24,7 @@ import (
 	"github.com/brienze1/lyrebird/internal/adapters/mcp"
 	"github.com/brienze1/lyrebird/internal/adapters/proxy"
 	"github.com/brienze1/lyrebird/internal/adapters/scripting"
+	"github.com/brienze1/lyrebird/internal/adapters/streamplane"
 	"github.com/brienze1/lyrebird/internal/adapters/template"
 	"github.com/brienze1/lyrebird/internal/domain"
 	"github.com/brienze1/lyrebird/internal/infra/auth"
@@ -58,6 +59,14 @@ type App struct {
 	// provably unchanged (FR-010, constitution Principle V).
 	grpcListener net.Listener
 	grpcServer   *grpcplane.Server
+
+	// streamListener/streamServer are nil unless cfg.StreamPlaneAddr is set
+	// (LYREBIRD_STREAM_PORT) — the byte-stream data plane is opt-in on
+	// exactly the same terms as the gRPC one, so an unconfigured port leaves
+	// this whole surface absent and every other path provably unchanged
+	// (003's FR-026, constitution Principle V).
+	streamListener net.Listener
+	streamServer   *streamplane.Server
 
 	// cancelServerCtx cancels the context threaded into proxy.NewHandler
 	// (which a FaultTimeout hang is bound to — see fault.go's serveFault
@@ -98,8 +107,16 @@ type core struct {
 	deleteSpaceUC    *usecase.DeleteSpace
 	exportSeedsUC    *usecase.ExportSeeds
 	importSeedsUC    *usecase.ImportSeeds
-	templater        usecase.Templater
-	scriptEngine     *scripting.Engine
+	endpointsUC      *usecase.Endpoints
+	emitFrameUC      *usecase.EmitFrame
+
+	// streamRegistry is nil unless cfg.StreamPlaneAddr is set. It is built
+	// here rather than inside the stream server because the reset and
+	// emit_frame use cases need the SAME instance the listener serves from,
+	// and both are constructed before any listener is bound.
+	streamRegistry *streamplane.Registry
+	templater      usecase.Templater
+	scriptEngine   *scripting.Engine
 
 	// mitmCA and getMITMCACertUC are nil unless cfg.MITMEnabled — see
 	// buildCore's construction below and constitution Principle V (a
@@ -149,7 +166,8 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 		return nil, fmt.Errorf("bootstrap: seeds: %w", err)
 	}
 	log.Info("seeds loaded",
-		"partitions", len(sd.Partitions), "mocks", len(sd.Mocks), "upstreams", len(sd.Upstreams))
+		"partitions", len(sd.Partitions), "mocks", len(sd.Mocks), "upstreams", len(sd.Upstreams),
+		"endpoints", len(sd.Endpoints))
 
 	gcLoop := gc.New(cfg.GCInterval, cfg.TrafficTTL, st, clock.System{}, log)
 	gcLoop.Start(ctx)
@@ -161,19 +179,33 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 	getTrafficUC := usecase.NewGetTraffic(st)
 	clearTrafficUC := usecase.NewClearTraffic(st)
 
+	// Built before the use cases that consume it, and only when the
+	// byte-stream plane is enabled: a nil registry is what makes every
+	// stream-aware use case behave exactly as it did before this feature
+	// (003's FR-026). Deliberately NOT boxed into the interface when nil —
+	// a typed-nil interface would defeat every nil check downstream.
+	var streamRegistry *streamplane.Registry
+	var connRegistry usecase.ConnectionRegistry
+	if cfg.StreamPlaneAddr != "" {
+		streamRegistry = streamplane.NewRegistry()
+		connRegistry = streamRegistry
+	}
+
 	matchEval := matcher.New()
 	templater := template.New()
 	matchRequestUC := usecase.NewMatchRequest(st, sd, matchEval, scriptEngine, st)
 	matchTestUC := usecase.NewMatchTest(st, sd, matchEval, templater, st)
 	mockCRUDUC := usecase.NewMockCRUD(st, sd, matchEval, scriptEngine, idgen.UUID{}, clock.System{}, st)
-	resetUC := usecase.NewReset(st, st, st)
+	endpointsUC := usecase.NewEndpoints(st, sd, connRegistry, clock.System{})
+	emitFrameUC := usecase.NewEmitFrame(endpointsUC, connRegistry)
+	resetUC := usecase.NewReset(st, st, st, st, connRegistry)
 	metricsUC := usecase.NewMetrics(st, clock.System{})
 	promoteTrafficUC := usecase.NewPromoteTraffic(st, mockCRUDUC)
 	createSpaceUC := usecase.NewCreateSpace(st, clock.System{})
 	listSpacesUC := usecase.NewListSpaces(st)
 	deleteSpaceUC := usecase.NewDeleteSpace(st)
-	exportSeedsUC := usecase.NewExportSeeds(listUpstreamsUC, mockCRUDUC)
-	importSeedsUC := usecase.NewImportSeeds(setUpstreamUC, mockCRUDUC)
+	exportSeedsUC := usecase.NewExportSeeds(listUpstreamsUC, mockCRUDUC, endpointsUC)
+	importSeedsUC := usecase.NewImportSeeds(setUpstreamUC, mockCRUDUC, endpointsUC)
 
 	// The default space is always implicitly active (every request/mock/
 	// upstream falls back to it) and can never be deleted, so it's
@@ -223,6 +255,8 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 		DeleteSpace:    deleteSpaceUC,
 		ExportSeeds:    exportSeedsUC,
 		ImportSeeds:    importSeedsUC,
+		Endpoints:      endpointsUC,
+		EmitFrame:      emitFrameUC,
 		GetMITMCACert:  getMITMCACertUC,
 	})
 
@@ -234,6 +268,7 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 		mockCRUDUC: mockCRUDUC, resetUC: resetUC, metricsUC: metricsUC, promoteTrafficUC: promoteTrafficUC,
 		createSpaceUC: createSpaceUC, listSpacesUC: listSpacesUC, deleteSpaceUC: deleteSpaceUC,
 		exportSeedsUC: exportSeedsUC, importSeedsUC: importSeedsUC,
+		endpointsUC: endpointsUC, emitFrameUC: emitFrameUC, streamRegistry: streamRegistry,
 		templater: templater, scriptEngine: scriptEngine,
 		mitmCA: mitmCA, getMITMCACertUC: getMITMCACertUC,
 		authIssuer: authIssuer, issueTokenUC: issueTokenUC,
@@ -280,6 +315,14 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	}
 	controlMux.HandleFunc("GET /__lyrebird/examples", httpadmin.ListExamples)
 	controlMux.HandleFunc("GET /__lyrebird/examples/{id}", httpadmin.GetExample)
+	controlMux.HandleFunc("GET /__lyrebird/stream/endpoints", httpadmin.ListEndpoints(c.endpointsUC))
+	controlMux.HandleFunc("POST /__lyrebird/stream/endpoints", httpadmin.CreateEndpoint(c.endpointsUC))
+	// {name...} (Go 1.22 ServeMux's trailing wildcard), not {name}: an
+	// endpoint name may itself contain "/" (a namespaced family like
+	// "cb5/spp" — usecase.validateEndpoint allows it), and a single-segment
+	// wildcard would truncate the captured name at the first slash.
+	controlMux.HandleFunc("DELETE /__lyrebird/stream/endpoints/{name...}", httpadmin.DeleteEndpoint(c.endpointsUC))
+	controlMux.HandleFunc("POST /__lyrebird/stream/emit", httpadmin.EmitFrame(c.emitFrameUC))
 	controlMux.HandleFunc("GET /__lyrebird/export", httpadmin.ExportConfig(c.exportSeedsUC))
 	controlMux.HandleFunc("POST /__lyrebird/import", httpadmin.ImportConfig(c.importSeedsUC))
 	controlMux.Handle("/mcp", mcp.Handler(c.mcpServer))
@@ -355,6 +398,42 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 		})
 	}
 
+	// Opt-in byte-stream data plane. Bound only when configured; wired to the
+	// SAME match + record use cases as the other two planes, and never
+	// authenticated. A bind failure tears down what we've already opened,
+	// exactly like the listeners above.
+	var streamSrv *streamplane.Server
+	var streamLn net.Listener
+	if cfg.StreamPlaneAddr != "" {
+		streamLn, err = lc.Listen(ctx, "tcp", cfg.StreamPlaneAddr)
+		if err != nil {
+			cancelServerCtx()
+			_ = dataLn.Close()
+			_ = controlLn.Close()
+			if grpcLn != nil {
+				_ = grpcLn.Close()
+			}
+			c.gcLoop.Stop()
+			_ = c.store.Close()
+			return nil, fmt.Errorf("bootstrap: listen stream plane: %w", err)
+		}
+		streamSrv = streamplane.New(streamplane.Deps{
+			Match:     c.matchRequestUC,
+			Record:    c.recordTrafficUC,
+			Endpoints: c.endpointsUC,
+			// The SAME registry the emit_frame and reset use cases hold, so
+			// an injection reaches the connection this listener is serving
+			// and a reset closes it.
+			Registry:     c.streamRegistry,
+			Templater:    c.templater,
+			Script:       c.scriptEngine,
+			DefaultSpace: cfg.DefaultSpace,
+			BodyCapBytes: cfg.BodyCapBytes,
+			Clock:        clock.System{},
+			Log:          log,
+		})
+	}
+
 	// The data plane is served by dataHandler directly, not via an
 	// http.ServeMux: ServeMux's pattern matching requires the request
 	// path to start with "/", but a CONNECT request's authority-form
@@ -389,6 +468,15 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 			}
 		}()
 	}
+	if streamSrv != nil {
+		go func() {
+			// Serve returns nil on Shutdown, matching grpc.Server.Serve's
+			// contract so both listeners are treated identically here.
+			if err := streamSrv.Serve(streamLn); err != nil {
+				log.Error("stream-plane server error", "err", err)
+			}
+		}()
+	}
 
 	// Every step that determines correctness (key, store, seeds) has
 	// succeeded — flip readiness now.
@@ -410,6 +498,8 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 		controlServer:   controlSrv,
 		grpcListener:    grpcLn,
 		grpcServer:      grpcSrv,
+		streamListener:  streamLn,
+		streamServer:    streamSrv,
 		cancelServerCtx: cancelServerCtx,
 	}, nil
 }
@@ -446,6 +536,16 @@ func (a *App) GRPCAddr() string {
 		return ""
 	}
 	return a.grpcListener.Addr().String()
+}
+
+// StreamAddr returns the actual address the byte-stream data-plane listener
+// is bound to, or "" when the plane is not enabled — useful in tests that
+// bind to ":0" for an ephemeral port.
+func (a *App) StreamAddr() string {
+	if a.streamListener == nil {
+		return ""
+	}
+	return a.streamListener.Addr().String()
 }
 
 // Shutdown stops the GC loop, then both HTTP servers, and closes the store.
@@ -497,6 +597,16 @@ func (a *App) Shutdown(ctx context.Context) error {
 		go func() {
 			defer wg.Done()
 			a.grpcServer.GracefulStop()
+		}()
+	}
+	// The byte-stream server drains alongside them: it stops accepting,
+	// drops every live connection (which stops their cadences) and waits for
+	// its in-flight frame handlers, so no goroutine outlives Shutdown.
+	if a.streamServer != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.streamServer.Shutdown()
 		}()
 	}
 	wg.Wait()

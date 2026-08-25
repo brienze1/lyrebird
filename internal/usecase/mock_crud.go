@@ -40,6 +40,13 @@ type MockInput struct {
 	Action     domain.Action
 	Scenario   *domain.Scenario
 	TTLSeconds *int
+	// Projection overrides the byte-stream endpoint's field projection for
+	// this rule alone (003's FR-006). Nil for every non-stream mock.
+	Projection *domain.Projection
+	// FromCapture marks a mock derived from recorded traffic rather than
+	// authored by hand, so an export can warn about it (003's FR-035). Set
+	// by PromoteTraffic, never by an ordinary create call.
+	FromCapture bool
 }
 
 func (uc *MockCRUD) validate(in MockInput) error {
@@ -50,6 +57,9 @@ func (uc *MockCRUD) validate(in MockInput) error {
 		return fmt.Errorf("%w: ttl_seconds must be a positive number of seconds, or omitted", domain.ErrInvalidMock)
 	}
 	if err := validateAction(in.Action); err != nil {
+		return err
+	}
+	if err := validateStreamRule(in); err != nil {
 		return err
 	}
 	if err := uc.match.ValidateMatch(in.Match); err != nil {
@@ -93,6 +103,64 @@ func scenarioWithDefault(sc *domain.Scenario) *domain.Scenario {
 	return &out
 }
 
+// validateStreamRule rejects, at write time, the two things a byte-stream
+// rule cannot be (003's FR-025, data-model.md §10).
+//
+// A `proxy` action is the important one: the other planes forward to a real
+// upstream, but a stream endpoint exists precisely so that no device is
+// attached, so such a rule could never be served. Rejecting it here states
+// the limitation at the moment its author can act on it, rather than leaving
+// them to debug a mysteriously silent frame at serve time — the same
+// write-time-not-first-match-time discipline ValidateMatch already applies to
+// a bad regex.
+//
+// A rule is recognised as a stream rule by its match.method, the one value a
+// frame ever carries. A rule that omits method (the common, path-only case)
+// is not assumed to be a stream rule: it may legitimately be a catch-all that
+// also covers HTTP, and refusing a proxy action on those would break the
+// existing planes.
+func validateStreamRule(in MockInput) error {
+	isStream := in.Match.Method == domain.StreamMethod
+	if isStream && in.Action.Kind == domain.ActionProxy {
+		return fmt.Errorf(
+			"%w: a %s rule cannot use action proxy — the byte-stream plane has no upstream to forward to "+
+				"(a stand-in exists so that no device is attached); use respond or fault instead",
+			domain.ErrInvalidMock, domain.StreamMethod,
+		)
+	}
+	return validateProjection(in.Projection)
+}
+
+// validateProjection checks a rule-level projection override is well-formed.
+// It is shared with endpoint declaration, where the same grammar appears as
+// the endpoint's default.
+func validateProjection(p *domain.Projection) error {
+	if p == nil {
+		return nil
+	}
+	seen := make(map[string]bool, len(p.At))
+	for _, f := range p.At {
+		switch {
+		case f.Name == "":
+			return fmt.Errorf("%w: projection.at field name is required", domain.ErrInvalidMock)
+		case seen[f.Name]:
+			return fmt.Errorf("%w: projection.at declares %q twice", domain.ErrInvalidMock, f.Name)
+		case f.Offset < 0:
+			return fmt.Errorf("%w: projection.at %q offset must not be negative", domain.ErrInvalidMock, f.Name)
+		case f.Length <= 0:
+			return fmt.Errorf("%w: projection.at %q length must be positive", domain.ErrInvalidMock, f.Name)
+		}
+		switch f.As {
+		case domain.ProjectAsText, domain.ProjectAsInt, domain.ProjectAsHex, "":
+		default:
+			return fmt.Errorf("%w: projection.at %q has unknown as %q (want text, int or hex)",
+				domain.ErrInvalidMock, f.Name, f.As)
+		}
+		seen[f.Name] = true
+	}
+	return nil
+}
+
 func validateAction(a domain.Action) error {
 	switch a.Kind {
 	case domain.ActionRespond:
@@ -125,18 +193,20 @@ func (uc *MockCRUD) Create(ctx context.Context, in MockInput) (domain.Mock, erro
 		return domain.Mock{}, err
 	}
 	m := domain.Mock{
-		ID:         uc.ids.NewID(),
-		Partition:  in.Partition,
-		Name:       in.Name,
-		Lifetime:   domain.LifetimeEphemeral,
-		TTLSeconds: in.TTLSeconds,
-		Priority:   in.Priority,
-		Group:      in.Group,
-		Match:      in.Match,
-		Script:     in.Script,
-		Action:     in.Action,
-		Scenario:   scenarioWithDefault(in.Scenario),
-		CreatedAt:  uc.clock.Now(),
+		ID:          uc.ids.NewID(),
+		Partition:   in.Partition,
+		Name:        in.Name,
+		Lifetime:    domain.LifetimeEphemeral,
+		TTLSeconds:  in.TTLSeconds,
+		Priority:    in.Priority,
+		Group:       in.Group,
+		Match:       in.Match,
+		Script:      in.Script,
+		Action:      in.Action,
+		Scenario:    scenarioWithDefault(in.Scenario),
+		Projection:  in.Projection,
+		FromCapture: in.FromCapture,
+		CreatedAt:   uc.clock.Now(),
 	}
 	if err := uc.repo.CreateMock(ctx, m); err != nil {
 		return domain.Mock{}, fmt.Errorf("usecase: create mock: %w", err)
@@ -201,7 +271,12 @@ func (uc *MockCRUD) Update(ctx context.Context, partition, id string, in MockInp
 		ID: existing.ID, Partition: existing.Partition, Lifetime: domain.LifetimeEphemeral,
 		Name: in.Name, TTLSeconds: in.TTLSeconds, Priority: in.Priority, Group: in.Group,
 		Match: in.Match, Script: in.Script, Action: in.Action, Scenario: scenarioWithDefault(in.Scenario),
-		CreatedAt: existing.CreatedAt,
+		Projection: in.Projection,
+		// FromCapture is provenance, not a mutable field: a hand-edited
+		// promoted mock is still derived from captured bytes, so the export
+		// warning must survive an update (003's FR-035).
+		FromCapture: existing.FromCapture,
+		CreatedAt:   existing.CreatedAt,
 	}
 	if err := uc.repo.UpdateMock(ctx, updated); err != nil {
 		return domain.Mock{}, fmt.Errorf("usecase: update mock: %w", err)

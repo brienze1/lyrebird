@@ -29,6 +29,7 @@ type ImportConfigIn struct {
 type ImportConfigOut struct {
 	UpstreamsImported int `json:"upstreams_imported"`
 	MocksImported     int `json:"mocks_imported"`
+	EndpointsImported int `json:"endpoints_imported"`
 }
 
 func registerImportExportTools(s *sdkmcp.Server, deps Deps) {
@@ -42,7 +43,7 @@ func registerImportExportTools(s *sdkmcp.Server, deps Deps) {
 		if err != nil {
 			return nil, ExportConfigOut{}, explainErr(err)
 		}
-		raw, err := yaml.Marshal(dto.SeedBundleToDTO(bundle))
+		raw, err := dto.RenderSeedBundleYAML(bundle)
 		if err != nil {
 			return nil, ExportConfigOut{}, explainErr(err)
 		}
@@ -61,14 +62,18 @@ func registerImportExportTools(s *sdkmcp.Server, deps Deps) {
 		if err := yaml.Unmarshal([]byte(in.YAML), &bundle); err != nil {
 			return nil, ImportConfigOut{}, explainErr(err)
 		}
-		upstreams, mocks, err := dto.SeedBundleFromDTO(partition, bundle)
+		upstreams, mocks, endpoints, err := dto.SeedBundleFromDTO(partition, bundle)
 		if err != nil {
 			return nil, ImportConfigOut{}, explainErr(err)
 		}
-		result, err := deps.ImportSeeds.Execute(ctx, partition, upstreams, mocks)
+		result, err := deps.ImportSeeds.Execute(ctx, partition, upstreams, mocks, endpoints)
 		if err != nil {
 			return nil, ImportConfigOut{}, explainErr(err)
 		}
-		return nil, ImportConfigOut{UpstreamsImported: result.UpstreamsImported, MocksImported: result.MocksImported}, nil
+		return nil, ImportConfigOut{
+			UpstreamsImported: result.UpstreamsImported,
+			MocksImported:     result.MocksImported,
+			EndpointsImported: result.EndpointsImported,
+		}, nil
 	})
 }

@@ -68,6 +68,38 @@ always-up, immune to `reset`/GC/TTL. See `specs/001-lyrebird/contracts/seed-conf
 schema, and `GET /__lyrebird/export` / MCP's `export_config` to generate one from a space's current
 runtime state.
 
+## Running lyrebird for the CB5 local stack
+
+CB5 (`bhlabz/cb5-*`) is the first real consumer of the byte-stream data plane. Its stack does not
+run the published image or a release: `cb5local` (`bhlabz/cb5local`, itself under construction)
+builds lyrebird **from this checkout's own source tree** and reports the exact revision it built
+(`cb5-spec`'s `contracts/stack-cli.md`, "which source revision it was built from" — `cb5local status`).
+That is why nothing here hardcodes a commit SHA: run `git rev-parse HEAD` in this checkout for the
+revision actually in use, rather than trusting a value that would go stale the moment another commit
+lands on this branch.
+
+What IS stable, and worth recording:
+
+- This branch (`cb5-1-wi-09-cb5-endpoints`) is cut from **`origin/cb5-2` @ `95d72de`**
+  (`brienze1/lyrebird` PR #28 — the byte-stream data plane, `specs/003-stream-data-plane/`), not from
+  `main`. CB5 is that PR's first consumer; the PR is deliberately left **unmerged** and every fix this
+  branch makes on top of it is a local, unpushed commit, offered upstream individually rather than
+  folded silently into someone else's diff.
+- `config/cb5-local-stack.yaml` seeds the three CB5 endpoints — `cb5/spp` (the app↔device link),
+  `cb5/gps` (the position source), `cb5/gpio` (digital I/O) — in space `cb5`, plus the low-priority
+  pin defaults the firmware's boot gate needs before any test scenario is running to set them. See
+  the seed file's own header comment for exactly which upstream file fixed each name, framing and pin
+  number.
+
+`cb5local` sets four `LYREBIRD_*` variables to run this stack (the rest keep their defaults above):
+
+| Variable | Value | Why |
+|---|---|---|
+| `LYREBIRD_CONTROL_PORT` | `9090` | MCP + Admin REST — cb5-e2e's `.env.local` names this port explicitly rather than trusting the default, so a stack that changes it is still discoverable. |
+| `LYREBIRD_STREAM_PORT` | `7070` | Opt-in byte-stream data plane (unset ⇒ no listener at all) — this is the port every CB5 fake peripheral (firmware `src/fake/`) dials. |
+| `LYREBIRD_SEED_DIR` | this checkout's `config/` directory | Loads `cb5-local-stack.yaml` at boot, so the three endpoints and the pin defaults exist before the firmware's boot gate ever polls them. |
+| `LYREBIRD_DEFAULT_SPACE` | `cb5` | Belt-and-suspenders: cb5-e2e's own steps always send `X-Lyrebird-Space: cb5` / `space=cb5` explicitly and never rely on this, but it makes a manual `curl` against the control plane behave the same way without remembering the header. |
+
 ## Environment variables
 
 Every variable is optional; Lyrebird runs with sane defaults if none are set.
@@ -76,6 +108,8 @@ Every variable is optional; Lyrebird runs with sane defaults if none are set.
 |---|---|---|
 | `LYREBIRD_DATA_PORT` | data-plane listen port | `8080` |
 | `LYREBIRD_CONTROL_PORT` | control-plane listen port (MCP + Admin REST) | `9090` |
+| `LYREBIRD_GRPC_PORT` | plaintext-gRPC (h2c) data-plane port — **opt-in**, no gRPC listener when unset | unset — disabled |
+| `LYREBIRD_STREAM_PORT` | generic byte-stream data-plane port — **opt-in**, no TCP listener when unset | unset — disabled |
 | `LYREBIRD_DEFAULT_SPACE` | default partition/space name | `default` |
 | `LYREBIRD_SEED_DIR` | directory of seed config YAML, loaded at boot | `/config` |
 | `LYREBIRD_DB_PATH` | SQLite store file path (traffic log + ephemeral mocks) | `/data/lyrebird.db` |

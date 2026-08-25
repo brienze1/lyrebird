@@ -134,6 +134,15 @@ type MockDTO struct {
 	Script     *ScriptDTO   `json:"script,omitempty" yaml:"script,omitempty"`
 	Action     ActionDTO    `json:"action" yaml:"action"`
 	Scenario   *ScenarioDTO `json:"scenario,omitempty" yaml:"scenario,omitempty"`
+	// Projection overrides the byte-stream endpoint's field projection for
+	// this rule alone (003's FR-006). A sibling of Match rather than a field
+	// inside it, matching the rule shape contracts/stream-data-plane.md
+	// documents. Absent on every mock that is not a byte-stream rule.
+	Projection *ProjectionDTO `json:"projection,omitempty" yaml:"projection,omitempty"`
+	// FromCapture is read-only provenance, set by promote_traffic and never
+	// accepted on the way in — a caller cannot declare a hand-written mock to
+	// be captured traffic, nor launder a captured one into looking authored.
+	FromCapture bool `json:"from_capture,omitempty" yaml:"from_capture,omitempty"`
 }
 
 // MatcherFromDTO converts a MatcherDTO to its domain equivalent.
@@ -263,7 +272,8 @@ func MockToDTO(m domain.Mock) MockDTO {
 		ID: m.ID, Name: m.Name, Priority: m.Priority, Group: m.Group,
 		Lifetime: string(m.Lifetime), TTLSeconds: m.TTLSeconds,
 		Match: MatchToDTO(m.Match), Script: ScriptToDTO(m.Script), Action: ActionToDTO(m.Action),
-		Scenario: ScenarioToDTO(m.Scenario),
+		Scenario: ScenarioToDTO(m.Scenario), Projection: ProjectionToDTO(m.Projection),
+		FromCapture: m.FromCapture,
 	}
 }
 
@@ -287,6 +297,8 @@ func MockInputFromDTO(partition string, d MockDTO) (usecase.MockInput, error) {
 	return usecase.MockInput{
 		Partition: partition, Name: d.Name, Priority: d.Priority, Group: d.Group,
 		Match: MatchFromDTO(d.Match), Script: ScriptFromDTO(d.Script), Action: action, TTLSeconds: d.TTLSeconds,
-		Scenario: ScenarioFromDTO(d.Scenario),
+		Scenario: ScenarioFromDTO(d.Scenario), Projection: ProjectionFromDTO(d.Projection),
+		// FromCapture is deliberately NOT read from the DTO: provenance is
+		// something Lyrebird observes, not something a caller asserts.
 	}, nil
 }

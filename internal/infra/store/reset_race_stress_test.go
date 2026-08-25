@@ -73,7 +73,7 @@ import (
 func TestResetAgainstConcurrentInFlightWritesStress(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
-	uc := usecase.NewReset(st, st, st)
+	uc := usecase.NewReset(st, st, st, nil, nil)
 
 	const partition = "default"
 	const rounds = 200

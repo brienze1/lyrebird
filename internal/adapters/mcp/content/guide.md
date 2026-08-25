@@ -51,3 +51,46 @@ catch-all fallback at low priority.
 `list_traffic`/`get_traffic`/`inspect_requests` let you see what actually happened; `metrics`
 aggregates counts and latency by mock/path/status; `reset` clears ephemeral mocks (and optionally
 traffic) while preserving seeded fixtures.
+
+## Other data planes (opt-in)
+
+Lyrebird serves the same match→respond model over two more transports. Both are off unless the
+operator sets their port, and neither needs a new control surface: rules on them are ordinary mocks,
+so `create_mock`, `match_test`, `promote_traffic`, spaces, `reset` and TTL all apply as they do to
+HTTP.
+
+**gRPC** (`LYREBIRD_GRPC_PORT`): a unary call is matched by its method path (`/pkg.Service/Method`)
+and its protobuf is parsed at the wire level, so a mock matches request fields as `$.f1`, `$.f2`, …
+with no compiled schema. The respond body is a field-spec re-encoded to protobuf. See the
+`gcp-kms-grpc` and `gcp-pubsub-grpc` recipes.
+
+**Byte streams** (`LYREBIRD_STREAM_PORT`): for a peripheral that speaks framed bytes rather than
+requests — a serial line, a serial-profile radio link, a pin-level control channel.
+
+1. `create_endpoint` declares the boundary and its `framing` (exactly one of `delimiter`,
+   `delimiter_hex`, `length`, or `prefix`), plus an optional default `projection` and `cadence`.
+2. A stand-in process connects over TCP and sends one CRLF-terminated line,
+   `LYREBIRD/1 <endpoint> [space=<name>]`. It gets `OK`, or an `ERR …` line naming the problem.
+3. Rules are ordinary mocks with `match.method` `FRAME` and `match.path` `/<endpoint>`. Each frame
+   is projected into an envelope your usual body matchers address:
+
+   - `$.len`, `$.hex`, `$.text` — always present (`$.text` is latin-1, so every byte round-trips)
+   - `$.fields.0`, `$.fields.1`, … — when the projection declares a `split`
+   - `$.at.<name>` — for each declared `{name, offset, length, as: text|int|hex}`
+
+   Use gjson-style paths (`$.fields.0`), not bracket indexes. A rule may carry its own `projection`
+   to read the same bytes differently from every other rule on that endpoint.
+4. The respond body is a list of parts: `[{"text":"OK"}]`, `[{"hex":"0d0a"}]`,
+   `[{"int":7,"width":3,"pad":"0"}]`, `[{"copyFrom":"$.fields.1"}]` to echo part of the triggering
+   frame, `[{"repeat":{"hex":"00"},"times":4}]`. The endpoint's terminator is appended unless you
+   use the object form with `"raw": true`. `script.respond_src` works here too — return that JSON as
+   a string.
+5. `emit_frame` pushes a frame into a live connection with nothing having asked for it, and an
+   endpoint's `cadence` emits a declared sequence on an interval. Both record as `EMIT`; an inbound
+   frame records as `IN` and an answer as `OUT`.
+
+Faults work as elsewhere: `delay` (a slow line), `reset` (the connection drops), `timeout` (silence,
+distinguishable from an unmatched frame only by the recorded decision), `malformed` (bytes without
+the framing terminator). `proxy` is **not** served on this plane — there is no real device to
+forward to — and such a rule is rejected when you create it. Full walkthrough: `get_example` with
+`byte-stream-endpoint`.
