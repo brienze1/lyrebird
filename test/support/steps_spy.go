@@ -29,6 +29,13 @@ type spyState struct {
 	lastResp      *http.Response
 	lastRespBody  []byte
 	lastPartition string
+
+	// lastTrafficMarker is the ID of the traffic-log head in lastPartition
+	// captured immediately before the most recent request was sent (empty if
+	// the partition had no traffic yet). lastTraffic polls until the head
+	// differs from this marker, so "the recorded traffic for that request"
+	// actually means that request — see lastTraffic's doc comment.
+	lastTrafficMarker string
 }
 
 func (t *spyState) newFakeUpstream() *FakeUpstream {
@@ -123,6 +130,20 @@ func (t *spyState) sendRequest(ctx context.Context, method, path, host, partitio
 		req.Header.Set(k, v)
 	}
 
+	// Capture the traffic-log head in this partition BEFORE sending, so
+	// lastTraffic can later tell "this request's own record" apart from
+	// whatever was already there — see lastTraffic's doc comment for why
+	// that isn't the same thing as "the newest record" right after we get
+	// our response back.
+	marker, err := t.s.app.Store.ListTraffic(ctx, t.lastPartition, usecase.TrafficFilter{})
+	if err != nil {
+		return fmt.Errorf("list traffic before send: %w", err)
+	}
+	t.lastTrafficMarker = ""
+	if len(marker) > 0 {
+		t.lastTrafficMarker = marker[0].ID
+	}
+
 	client := &http.Client{Timeout: 5 * time.Second} // client-side bound so a Lyrebird-side hang fails the test fast, not after go test's own suite timeout
 	resp, err := client.Do(req)
 	if err != nil {
@@ -209,23 +230,38 @@ func (t *spyState) theFakeUpstreamReceivedABodyOfBytes(want int) error {
 	return nil
 }
 
-// lastTraffic fetches the most recently recorded traffic entry in the
-// partition the last request was sent to. Every scenario in this feature
-// sends at most one data-plane request per distinct partition it asserts
-// against (the "Partition isolation" scenario sends two requests total, but
-// to two different partitions, one each) — so within whichever partition
-// t.lastPartition currently names, "the most recent record" and "the record
-// for that request" are still the same thing — ListTraffic already orders
-// newest-first.
+// lastTrafficPollInterval and lastTrafficPollAttempts bound lastTraffic's
+// wait for the last request's own record to appear (3s total). Handler.
+// recordTraffic (internal/adapters/proxy/handler.go) runs AFTER the response
+// is written and flushed, queued behind the store's single serialized SQLite
+// writer — so on a slow runner a read right after receiving the response can
+// still see a PREVIOUS request's record. Waiting is bounded and polled, never
+// slept for a fixed guess, and never done by weakening the assertion instead.
+const (
+	lastTrafficPollInterval = 100 * time.Millisecond
+	lastTrafficPollAttempts = 30
+)
+
+// lastTraffic fetches the traffic entry for the *last request sent*, in the
+// partition it was sent to — which is not simply "the newest entry right
+// now": sendRequest captures the partition's traffic-log head ID before
+// sending (t.lastTrafficMarker), and lastTraffic polls until the head
+// differs from that marker, so a record that was already there before this
+// request was sent is never mistaken for this request's own.
 func (t *spyState) lastTraffic(ctx context.Context) (domain.TrafficRecord, error) {
-	list, err := t.s.app.Store.ListTraffic(ctx, t.lastPartition, usecase.TrafficFilter{})
-	if err != nil {
-		return domain.TrafficRecord{}, fmt.Errorf("list traffic: %w", err)
+	for attempt := 0; attempt < lastTrafficPollAttempts; attempt++ {
+		list, err := t.s.app.Store.ListTraffic(ctx, t.lastPartition, usecase.TrafficFilter{})
+		if err != nil {
+			return domain.TrafficRecord{}, fmt.Errorf("list traffic: %w", err)
+		}
+		if len(list) > 0 && list[0].ID != t.lastTrafficMarker {
+			return list[0], nil
+		}
+		time.Sleep(lastTrafficPollInterval)
 	}
-	if len(list) == 0 {
-		return domain.TrafficRecord{}, fmt.Errorf("no traffic recorded in partition %q", t.lastPartition)
-	}
-	return list[0], nil
+	return domain.TrafficRecord{}, fmt.Errorf(
+		"traffic record for the last request never appeared after %s",
+		lastTrafficPollInterval*lastTrafficPollAttempts)
 }
 
 func (t *spyState) theRecordedTrafficForThatRequestHasDecision(ctx context.Context, want string) error {
