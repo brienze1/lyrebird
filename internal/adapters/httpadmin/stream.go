@@ -75,7 +75,9 @@ func CreateEndpoint(uc endpointsUseCase) http.HandlerFunc {
 	}
 }
 
-// DeleteEndpoint handles DELETE /__lyrebird/stream/endpoints/{name}.
+// DeleteEndpoint handles DELETE /__lyrebird/stream/endpoints/{name...} — a
+// trailing wildcard, because an endpoint name may itself contain "/"
+// (usecase.validateEndpoint, seeds.fileEndpoint.toDomain).
 func DeleteEndpoint(uc endpointsUseCase) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := uc.Delete(r.Context(), httpmw.PartitionFromContext(r.Context()), r.PathValue("name")); err != nil {

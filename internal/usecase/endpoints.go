@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/brienze1/lyrebird/internal/domain"
@@ -151,12 +152,28 @@ func validateEndpoint(in EndpointInput) error {
 	if in.Name == "" {
 		return fmt.Errorf("%w: endpoint name is required", domain.ErrInvalidMock)
 	}
-	// The name is the last path segment of DELETE /__lyrebird/stream/
-	// endpoints/{name}, and Go's ServeMux wildcard matches exactly one
-	// segment — the same constraint seeds.Load already enforces on mock
-	// names, for the same reason.
-	if strings.Contains(in.Name, "/") {
-		return fmt.Errorf("%w: endpoint name %q must not contain \"/\"", domain.ErrInvalidMock, in.Name)
+	// A name MAY contain "/" — a peripheral family that groups its endpoints
+	// under a common namespace (e.g. "cb5/spp", "cb5/gps") is a legitimate
+	// naming choice, and DELETE /__lyrebird/stream/endpoints/{name...} uses
+	// Go 1.22 ServeMux's trailing wildcard precisely so the whole remainder
+	// of the path — slashes included — reaches here undivided. What is
+	// still rejected is a name that would make that path punctuation
+	// AMBIGUOUS to reconstruct: a leading/trailing slash (indistinguishable
+	// from a typo'd extra segment), a doubled slash (an empty segment), or a
+	// "." / ".." segment — http.ServeMux cleans dot segments out of the
+	// request path before pattern matching, so a name containing one could
+	// be created but never again addressed by DELETE, making it permanently
+	// undeletable.
+	if strings.HasPrefix(in.Name, "/") || strings.HasSuffix(in.Name, "/") {
+		return fmt.Errorf("%w: endpoint name %q must not start or end with \"/\"", domain.ErrInvalidMock, in.Name)
+	}
+	if strings.Contains(in.Name, "//") {
+		return fmt.Errorf("%w: endpoint name %q must not contain an empty path segment (\"//\")",
+			domain.ErrInvalidMock, in.Name)
+	}
+	if clean := path.Clean("/" + in.Name); clean != "/"+in.Name {
+		return fmt.Errorf("%w: endpoint name %q must not contain a \".\" or \"..\" path segment",
+			domain.ErrInvalidMock, in.Name)
 	}
 	if strings.ContainsAny(in.Name, " \t\r\n") {
 		return fmt.Errorf("%w: endpoint name %q must not contain whitespace — a handshake line is space-separated",
@@ -203,8 +220,11 @@ func validateCadence(c *domain.Cadence) error {
 	if c == nil {
 		return nil
 	}
-	if c.Interval <= 0 {
-		return fmt.Errorf("%w: cadence.interval must be positive", domain.ErrInvalidMock)
+	// A zero interval is "immediate" mode (cadence.go's runCadence): every
+	// frame is queued back-to-back with no wait, paced only by the
+	// connection's own backpressure. Only a negative interval is malformed.
+	if c.Interval < 0 {
+		return fmt.Errorf("%w: cadence.interval must not be negative", domain.ErrInvalidMock)
 	}
 	// An empty frame list is an error rather than a silent no-op: a cadence
 	// that emits nothing is always a mistake, and one that quietly does

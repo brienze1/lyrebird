@@ -11,7 +11,7 @@ A named boundary. Declared in seed config or created during a session; a stand-i
 
 | Field | Type | Rules |
 | --- | --- | --- |
-| `Name` | string | Unique within a space. What a handshake names and a rule's `match.path` targets as `/<name>`. Must not contain `/`. |
+| `Name` | string | Unique within a space. What a handshake names and a rule's `match.path` targets as `/<name>`. May contain internal `/` segments (a namespaced family, e.g. `cb5/spp`); must not start or end with `/`, contain an empty (`//`) or dot (`.`/`..`) segment, or contain whitespace. |
 | `Partition` | string | The space it belongs to. |
 | `Framing` | `Framing` | How the stream divides into frames. Exactly one variant (§2). Required. |
 | `Projection` | `*Projection` | The default field decomposition for every rule on this endpoint (§4). Optional. |
@@ -45,13 +45,22 @@ Unprompted emission (FR-011). Belongs to an endpoint.
 
 | Field | Type | Rules |
 | --- | --- | --- |
-| `Interval` | duration | Time between emissions. Must be positive. |
+| `Interval` | duration | Time between emissions. Must not be negative. `0` is "immediate" (below). |
 | `Frames` | `[][]FramePart` | Emitted in order, one per interval. Must be non-empty. |
 | `OnExhaust` | `repeat_last` \| `loop` \| `stop` | Default `repeat_last` — what a stationary source does. |
 
 A cadence starts when a stand-in occupies the endpoint and stops when the connection ends or the
 space is reset. Its emissions go through the connection's single writer, so they never interleave
 with an answer or an injection (FR-033).
+
+**`Interval: 0` — immediate mode.** Every frame is queued back-to-back with no wait at all, paced
+only by the connection's own backpressure (the outbound queue's bounded channel, and beneath it the
+peer's TCP receive window) — never by a clock. This is for a source whose bytes are simply *there*
+for whoever reads them, with nothing about the result allowed to depend on how much real time has
+passed since occupancy (CB5-1 WI-13: a `100ms`+ cadence used to fake a continuously-streaming
+peripheral made what was available depend on the host's wall clock, unrelated to a scenario's own
+substituted clock — exactly the load-dependence a cadence with `Interval > 0` is fine to have for a
+genuinely time-based source, and exactly wrong for one that is not).
 
 ## 4. Frame envelope — what a rule matches against
 
@@ -167,11 +176,15 @@ Applied by an idempotent `ALTER TABLE … ADD COLUMN` guarded by `PRAGMA table_i
 
 ## 10. Validation rules
 
-- An endpoint name must be unique within its space, non-empty, and free of `/`.
+- An endpoint name must be unique within its space, non-empty, and free of whitespace; it may
+  contain internal `/` segments but must not start or end with `/`, contain an empty (`//`)
+  segment, or contain a `.`/`..` segment (`http.ServeMux` cleans those out of the request path
+  before pattern matching, so a name containing one would be undeletable through
+  `DELETE /__lyrebird/stream/endpoints/{name...}`).
 - `framing` is required and must set exactly one variant; `length` and `prefix.width` must be
   positive; `delimiter` must be non-empty.
-- A `cadence` must have a positive interval and a non-empty frame list — an empty one is an error,
-  not a silent no-op.
+- A `cadence` must have a non-negative interval (`0` is "immediate", §3) and a non-empty frame
+  list — an empty one is an error, not a silent no-op.
 - A projection field must have a name, a non-negative offset, a positive length and a known `as`.
 - A rule whose `match.path` names an endpoint that does not exist is accepted (rules are authored
   before boundaries exist in some orders) but reported by the endpoint listing as unreachable.

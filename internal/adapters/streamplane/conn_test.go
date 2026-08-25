@@ -48,6 +48,73 @@ func newTestConn(t *testing.T) (*conn, net.Conn) {
 	return c, client
 }
 
+// spyRecorder counts Execute calls, safe for concurrent access — the exact
+// shape TestConnEmitIsRecordedBeforeItReturns needs to observe recordOutbound
+// happening (or not) from the caller's own goroutine.
+type spyRecorder struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (r *spyRecorder) Execute(_ context.Context, _ usecase.RecordTrafficInput) (domain.TrafficRecord, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	return domain.TrafficRecord{}, nil
+}
+
+func (r *spyRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+// cb5-e2e's own harness assumes a synchronous control plane: pollUtil's
+// "ms <= 0 means one attempt" branch is only correct because "the plane
+// records a frame before the step that caused it returns" (test/integration/
+// steps/stream_steps_test.go, cb5-e2e). Reading the frame straight back after
+// emit() must therefore never race the write — this proves emit() itself
+// does not hand control back until the frame it queued is both on the wire
+// and in the traffic log, not merely accepted onto the outbound channel for
+// eventual delivery by writeLoop.
+func TestConnEmitIsRecordedBeforeItReturns(t *testing.T) {
+	server, client := net.Pipe()
+	rec := &spyRecorder{}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h := &Handler{record: rec, clock: systemClock{}, log: log}
+	endpoint := domain.Endpoint{Name: "widget", Partition: "default", Framing: delimiterFraming()}
+	c := newConn(server, "default", endpoint, handshake{}, h, NewRegistry(), log)
+	t.Cleanup(func() {
+		c.close()
+		_ = client.Close()
+	})
+
+	c.wg.Add(1)
+	go c.writeLoop()
+
+	// Drains the socket concurrently so net.Pipe's synchronous, unbuffered
+	// Write (which blocks until something Reads) is not itself the thing
+	// under test — only the ordering between emit() returning and the
+	// recorder being called is.
+	go func() {
+		buf := make([]byte, 64)
+		for {
+			if _, err := client.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	if err := c.emit(context.Background(), []byte(`[{"text":"X"}]`)); err != nil {
+		t.Fatalf("emit: %v", err)
+	}
+
+	if got := rec.count(); got != 1 {
+		t.Fatalf("recorder saw %d call(s) immediately after emit() returned, want 1 — "+
+			"the traffic record was not yet written when the caller regained control", got)
+	}
+}
+
 // FR-033/SC-006: every writer goes through one goroutine, so concurrent
 // emissions can never be spliced into each other and repeated runs deliver
 // the frames in the order they were queued.
@@ -191,6 +258,118 @@ func TestCadenceFrameAt(t *testing.T) {
 func TestCadenceFrameAtWithNoFrames(t *testing.T) {
 	if _, _, ok := cadenceFrameAt(&domain.Cadence{Interval: time.Second}, 0); ok {
 		t.Error("cadenceFrameAt() with no frames reported a frame, want none")
+	}
+}
+
+// runCadence starts the writer and the cadence exactly as serve() wires them
+// (conn.go), without the inbound frame-reading loop this test has no need
+// for — it exercises only the unprompted-emission side.
+func startCadence(t *testing.T, c *conn, cad *domain.Cadence) context.CancelFunc {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	c.wg.Add(1)
+	go c.writeLoop()
+	c.wg.Add(1)
+	go c.runCadence(ctx, cad)
+	return cancel
+}
+
+// CB5-1 WI-13 correction: a cadence with a positive interval pushes on the
+// HOST'S real clock, wholly unrelated to a scenario's substituted device
+// clock — the number of frames available inside a given device-time window
+// then depends on how fast the harness happens to issue calls (FR-027). An
+// Interval of 0 ("immediate") must remove that coupling entirely: every
+// frame is queued back-to-back, paced only by the connection's own
+// backpressure, never by a timer.
+//
+// The old ticker-based design needs a full Interval of real time before its
+// very *first* frame exists at all, and one Interval per frame after that —
+// with Interval at the CB5 seed's old 1000ms, reading even a handful of
+// frames would take several real seconds. Reading many frames well inside a
+// generous-but-bounded deadline is therefore direct proof the coupling is
+// gone, not a tuned guess at "fast enough".
+func TestRunCadenceImmediateModeDeliversWithoutWaitingOnAClock(t *testing.T) {
+	c, client := newTestConn(t)
+	cad := &domain.Cadence{
+		Interval:  0,
+		Frames:    [][]domain.FramePart{{{Text: ptr("TICK")}}},
+		OnExhaust: domain.OnExhaustionRepeatLast,
+	}
+	cancel := startCadence(t, c, cad)
+	defer cancel()
+
+	const wantFrames = 20
+	read := make(chan error, 1)
+	go func() {
+		r := bufio.NewReader(client)
+		for i := 0; i < wantFrames; i++ {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				read <- err
+				return
+			}
+			if got := strings.TrimRight(line, "\r\n"); got != "TICK" {
+				read <- fmt.Errorf("frame %d = %q, want %q", i, got, "TICK")
+				return
+			}
+		}
+		read <- nil
+	}()
+
+	// A single 1000ms-interval tick (the old CB5 seed's own configuration)
+	// would not even deliver the SECOND frame within this deadline; 20
+	// frames prove there is no per-frame wait at all, immediate or
+	// otherwise — this is not a tuned interval, it is the absence of one.
+	select {
+	case err := <-read:
+		if err != nil {
+			t.Fatalf("reading %d immediate-cadence frames: %v", wantFrames, err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("reading %d immediate-cadence frames did not complete within 500ms — still coupled to a clock", wantFrames)
+	}
+}
+
+// A stand-in that reads slowly must see exactly the same frames a fast
+// reader would — repeat_last never skips, drops or reorders content to
+// "catch up" to how quickly bytes were consumed.
+func TestRunCadenceImmediateModeSequenceSurvivesASlowReader(t *testing.T) {
+	c, client := newTestConn(t)
+	cad := &domain.Cadence{
+		Interval:  0,
+		Frames:    [][]domain.FramePart{{{Text: ptr("FIRST")}}, {{Text: ptr("SECOND")}}},
+		OnExhaust: domain.OnExhaustionRepeatLast,
+	}
+	cancel := startCadence(t, c, cad)
+	defer cancel()
+
+	r := bufio.NewReader(client)
+	readLine := func() string {
+		t.Helper()
+		// Bounded, not blocking forever: a read deadline turns "the fix
+		// regressed and nothing arrives" into a clean failure instead of a
+		// hung test.
+		if err := client.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			t.Fatalf("SetReadDeadline: %v", err)
+		}
+		line, err := r.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		return strings.TrimRight(line, "\r\n")
+	}
+
+	if got := readLine(); got != "FIRST" {
+		t.Fatalf("frame 0 = %q, want %q", got, "FIRST")
+	}
+	// Simulate a harness that is busy doing something else — slower than any
+	// wall-clock cadence interval this endpoint ever used in practice.
+	time.Sleep(150 * time.Millisecond)
+	if got := readLine(); got != "SECOND" {
+		t.Fatalf("frame 1 after a slow read = %q, want %q — pacing changed the sequence", got, "SECOND")
+	}
+	if got := readLine(); got != "SECOND" {
+		t.Fatalf("frame 2 (repeat_last) = %q, want %q", got, "SECOND")
 	}
 }
 

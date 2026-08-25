@@ -145,6 +145,23 @@ func TestEndpointsCreateDefaultsCadenceExhaustionToRepeatLast(t *testing.T) {
 	}
 }
 
+// A zero interval is "immediate" mode — every frame queued back-to-back,
+// paced only by the connection's own backpressure, never by a clock (CB5-1
+// WI-13 correction: a wall-clock cadence made a scenario's outcome depend on
+// how fast the harness issued HTTP calls, which FR-027 forbids). It must be
+// accepted, not rejected the way a genuinely malformed cadence is.
+func TestEndpointsCreateAcceptsImmediateCadence(t *testing.T) {
+	uc, _ := newEndpoints(nil)
+
+	e, err := uc.Create(context.Background(), cadenceInput(0, [][]domain.FramePart{{{Text: textPart("x")}}}))
+	if err != nil {
+		t.Fatalf("Create() with a zero cadence interval: %v", err)
+	}
+	if e.Cadence.Interval != 0 {
+		t.Errorf("Cadence.Interval = %v, want 0 (immediate)", e.Cadence.Interval)
+	}
+}
+
 // A handshake resolves one name to exactly one endpoint, so a duplicate is
 // refused whether the incumbent is ephemeral or seeded.
 func TestEndpointsCreateRejectsDuplicates(t *testing.T) {
@@ -171,7 +188,11 @@ func TestEndpointsCreateRejectsMalformedDeclarations(t *testing.T) {
 		in   EndpointInput
 	}{
 		{"no name", EndpointInput{Partition: "default", Framing: delimiterInput("x").Framing}},
-		{"name with a slash", delimiterInputNamed("a/b")},
+		{"name starting with a slash", delimiterInputNamed("/a")},
+		{"name ending with a slash", delimiterInputNamed("a/")},
+		{"name with a doubled slash", delimiterInputNamed("a//b")},
+		{"name with a \".\" path segment", delimiterInputNamed("cb5/./x")},
+		{"name with a \"..\" path segment", delimiterInputNamed("cb5/../evil")},
 		{"name with whitespace", delimiterInputNamed("a b")},
 		{"empty delimiter", EndpointInput{Partition: "default", Name: "x",
 			Framing: domain.Framing{Kind: domain.FramingDelimiter}}},
@@ -182,7 +203,7 @@ func TestEndpointsCreateRejectsMalformedDeclarations(t *testing.T) {
 		{"unknown framing kind", EndpointInput{Partition: "default", Name: "x",
 			Framing: domain.Framing{Kind: "smoke-signals"}}},
 		{"cadence with no frames", cadenceInput(time.Second, nil)},
-		{"cadence with no interval", cadenceInput(0, [][]domain.FramePart{{{Text: textPart("x")}}})},
+		{"cadence with a negative interval", cadenceInput(-time.Millisecond, [][]domain.FramePart{{{Text: textPart("x")}}})},
 		{"unknown on_exhaustion", unknownExhaustionInput()},
 		{"projection field with no name", projectionInput(domain.ProjectionField{Offset: 0, Length: 1})},
 		{"projection field with a zero length", projectionInput(domain.ProjectionField{Name: "a", Length: 0})},

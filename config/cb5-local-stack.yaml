@@ -1,0 +1,188 @@
+# config/cb5-local-stack.yaml
+#
+# Seeds the CB5 local test stack's byte-stream data plane (CB5-1-WI-09):
+# the three endpoints the firmware's fake peripherals (src/fake/, WI-15/16/17)
+# dial, plus the low-priority defaults CB5::_initGps() and
+# CB5::_scanConnectedApplicators() need to clear their boot gate before
+# cb5-e2e is even running to set anything.
+#
+# cb5local mounts this directory at LYREBIRD_SEED_DIR — see this checkout's
+# README.md, "Running lyrebird for the CB5 local stack" for the exact
+# LYREBIRD_* variables cb5local sets.
+#
+# Names, framing and pin numbers are contract, not invented here:
+#   - space/endpoint names + framing: bhlabz/cb5-e2e
+#     test/integration/resources/.env.local @ 63d8139
+#   - the digital-I/O line protocol (SET/READ/LEVEL, space-separated fields):
+#     bhlabz/cb5-e2e test/integration/steps/pin_steps_test.go @ 63d8139
+#   - pin numbers: cb5-service/src/config/config.h,
+#     CONFIG_PORT_GPIO_SENSOR_CONNECTED_APPLICATOR_{RIGHT,CENTER,LEFT} and
+#     CONFIG_PORT_GPIO_SENSOR_APPLICATOR_{RIGHT,CENTER,LEFT}
+#   - inverted position-sensor reads: cb5-spec's
+#     contracts/dosing-cycle.md, "The three applicators"
+#
+# Every rule below is priority 1, so any scenario-authored rule (cb5-e2e's
+# pin_steps_test.go writes at priority 100) outranks it without needing this
+# one deleted first.
+
+space: cb5
+
+endpoints:
+  # The app <-> device link: framed V5 requests in, framed &5 answers out.
+  # CRLF-terminated on both sides; the plane's returned frame INCLUDES its
+  # terminator, which the device's 14-byte length validation requires
+  # (contracts/frame-protocol.md).
+  - name: cb5/spp
+    framing: {delimiter: "\r\n"}
+
+  # The position source. The device's UART setup writes (u-blox/$PUBX) are
+  # absorbed with no answer expected (contracts/position-sentence.md).
+  #
+  # interval: 0ms — "immediate": the sentence below is placed on the wire
+  # and repeats, paced only by the connection's own backpressure, never by a
+  # clock (cadence.go's runCadence). This was originally seeded at 1000ms, a
+  # real-time heartbeat unrelated to the device's own substituted clock — the
+  # device's boot waits (and every scenario's clock advances) run on that
+  # substituted clock, so a wall-clock cadence made how many sentences had
+  # arrived by a given device-time window depend on how fast the harness
+  # happened to issue HTTP calls (measured: 10 fast clock-advance calls
+  # booted the device, 300 of them did not; blind 2000ms advances booted,
+  # blind 5000ms advances stalled). That is exactly what FR-027 forbids ("the
+  # clock never advances on its own... so no assertion can depend on how
+  # loaded the machine is") and exactly what
+  # contracts/peripheral-control.md's "Serve a sentence"/"Serve a sequence"
+  # already specify: bytes placed on the wire for the device's own capture
+  # loop to consume, not delivered on any schedule of the mock's own. Fixed
+  # here rather than tuned to a different interval, because no interval > 0
+  # removed the coupling — only immediate mode did.
+  #
+  # 2026-08-22: that reasoning was correct WHEN WRITTEN and is now superseded.
+  # cb5-service 6b9e151 closed the same coupling from the other side, by making
+  # advanceDeviceClock() cost real time in proportion to the advance — so the
+  # device clock can no longer outrun the wire, whatever this interval is.
+  #
+  # Immediate mode then turned out to be actively harmful: measured on the live
+  # stack it delivers 780 sentences/sec (1,403,419 entries in 30 min, 22.4% of
+  # inter-arrival gaps under 0.5ms). At that rate the device NEVER idles, so
+  # deviceIsSpinning() (src/fake/time-fake.cpp) cannot distinguish "parked in
+  # Timer::wait()" from "consuming an unthrottled byte stream" — both drive
+  # millis() identically — and release_next_wait() is starved. Boot then fails
+  # with zero display writes.
+  #
+  # 2ms is what every native reboot fixture uses and demonstrably works. It is
+  # also far closer to the hardware being substituted: a u-blox NEO-6M at 10Hz
+  # emits TEN sentences a second, not 780.
+  - name: cb5/gps
+    framing: {delimiter: "\n"}
+    cadence:
+      interval: 2ms
+      on_exhaustion: repeat_last
+      frames:
+        # Coordinates are cb5-e2e's own FIXTURE_LATITUDE/FIXTURE_LONGITUDE
+        # (.env.local: "0000.000"/"00000.000") — mid-Atlantic, unmistakably
+        # not a field trace (LGPD). Checksum 5F is the real GPRMC XOR of
+        # every byte between $ and *, computed by hand for this exact
+        # sentence text, not a placeholder — a placeholder "*XX" would fail
+        # GprmcProtocolValidation::validateEndHeader outright. The trailing
+        # \r is part of the PAYLOAD (framing here splits on \n alone), so
+        # the wire still carries the standard CRLF sentence terminator.
+        #
+        # Status "A" clears isDataReliable()'s field-3 check; the trailer
+        # "A*5F" clears validateEndHeader (position 0 one of A D E M N,
+        # position 1 '*', positions 2/3 each > ASCII '0' —
+        # src/utils/asciiCharToInt.cpp's asciiCharToNumber — '5' and 'F'
+        # both qualify; a placeholder "*00" would not).
+        - [{text: "$GPRMC,120000.00,A,0000.000,N,00000.000,E,000.0,000.0,010120,,,A*5F\r"}]
+
+  # Digital I/O: SET/READ/LEVEL, space-separated fields.
+  - name: cb5/gpio
+    framing: {delimiter: "\n"}
+    projection:
+      split: " "
+
+mocks:
+  # The boot-gate defaults CB5::_scanConnectedApplicators() needs: every
+  # applicator reports present, so `cb5local up` can report the firmware
+  # ready before any scenario has run a single step.
+  - name: cb5-seed-pin-14
+    priority: 1
+    match:
+      path: /cb5/gpio
+      body:
+        - jsonpath: "$.fields.0"
+          equals: "READ"
+        - jsonpath: "$.fields.1"
+          equals: "14"
+    action:
+      respond:
+        body: '[{"text":"LEVEL 14 1"}]'
+
+  - name: cb5-seed-pin-25
+    priority: 1
+    match:
+      path: /cb5/gpio
+      body:
+        - jsonpath: "$.fields.0"
+          equals: "READ"
+        - jsonpath: "$.fields.1"
+          equals: "25"
+    action:
+      respond:
+        body: '[{"text":"LEVEL 25 1"}]'
+
+  - name: cb5-seed-pin-35
+    priority: 1
+    match:
+      path: /cb5/gpio
+      body:
+        - jsonpath: "$.fields.0"
+          equals: "READ"
+        - jsonpath: "$.fields.1"
+          equals: "35"
+    action:
+      respond:
+        body: '[{"text":"LEVEL 35 1"}]'
+
+  # Position sensors read INVERTED (PoisonApplicator::readSensor() returns
+  # !readDigitalPort(...)), so level 1 means "has not arrived yet" — seeding
+  # 0 would complete every dose instantly and fail 002/E. DOSE RAPIDA before
+  # any scenario runs (contracts/dosing-cycle.md). Do not normalise this to
+  # match the presence rules above; the asymmetry is the contract.
+  - name: cb5-seed-pin-27
+    priority: 1
+    match:
+      path: /cb5/gpio
+      body:
+        - jsonpath: "$.fields.0"
+          equals: "READ"
+        - jsonpath: "$.fields.1"
+          equals: "27"
+    action:
+      respond:
+        body: '[{"text":"LEVEL 27 1"}]'
+
+  - name: cb5-seed-pin-33
+    priority: 1
+    match:
+      path: /cb5/gpio
+      body:
+        - jsonpath: "$.fields.0"
+          equals: "READ"
+        - jsonpath: "$.fields.1"
+          equals: "33"
+    action:
+      respond:
+        body: '[{"text":"LEVEL 33 1"}]'
+
+  - name: cb5-seed-pin-34
+    priority: 1
+    match:
+      path: /cb5/gpio
+      body:
+        - jsonpath: "$.fields.0"
+          equals: "READ"
+        - jsonpath: "$.fields.1"
+          equals: "34"
+    action:
+      respond:
+        body: '[{"text":"LEVEL 34 1"}]'

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -552,11 +553,30 @@ func (e fileEndpoint) toDomain(sourcePath, space string) (domain.Endpoint, error
 	if e.Name == "" {
 		return domain.Endpoint{}, fmt.Errorf("seeds: %s: endpoint name is required", sourcePath)
 	}
-	// Same single-path-segment constraint mock names carry: the name is the
-	// {name} wildcard of DELETE /__lyrebird/stream/endpoints/{name}.
-	if strings.ContainsAny(e.Name, "/ \t") {
+	// A name MAY contain "/" (a namespaced family like "cb5/spp") — mirrors
+	// usecase.validateEndpoint's rule exactly, so a name accepted here is
+	// never later rejected by create_endpoint at runtime, or the reverse.
+	// DELETE /__lyrebird/stream/endpoints/{name...} uses Go 1.22 ServeMux's
+	// trailing wildcard, which captures the whole remainder undivided; what
+	// is still rejected is punctuation that would make that path AMBIGUOUS
+	// to reconstruct, and a "." or ".." segment, which http.ServeMux cleans
+	// out of the request path before pattern matching — an endpoint seeded
+	// with one would be permanently undeletable through that route.
+	if strings.HasPrefix(e.Name, "/") || strings.HasSuffix(e.Name, "/") {
 		return domain.Endpoint{}, fmt.Errorf(
-			"seeds: %s: endpoint name %q must not contain \"/\" or whitespace", sourcePath, e.Name)
+			"seeds: %s: endpoint name %q must not start or end with \"/\"", sourcePath, e.Name)
+	}
+	if strings.Contains(e.Name, "//") {
+		return domain.Endpoint{}, fmt.Errorf(
+			"seeds: %s: endpoint name %q must not contain an empty path segment (\"//\")", sourcePath, e.Name)
+	}
+	if clean := path.Clean("/" + e.Name); clean != "/"+e.Name {
+		return domain.Endpoint{}, fmt.Errorf(
+			"seeds: %s: endpoint name %q must not contain a \".\" or \"..\" path segment", sourcePath, e.Name)
+	}
+	if strings.ContainsAny(e.Name, " \t\r\n") {
+		return domain.Endpoint{}, fmt.Errorf(
+			"seeds: %s: endpoint name %q must not contain whitespace", sourcePath, e.Name)
 	}
 
 	framing, err := e.Framing.toDomain(sourcePath, e.Name)
