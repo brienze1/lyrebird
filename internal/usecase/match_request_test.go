@@ -342,3 +342,57 @@ func TestExecuteProjectedPropagatesAScriptErrorWithItsMock(t *testing.T) {
 		t.Errorf("ExecuteProjected() = (%q, %v), want the offending mock returned unmatched", got.ID, matched)
 	}
 }
+
+// TestCadenceActionMocksAreInvisibleToOrdinaryFrameMatching is CB5-11
+// correction round 1's regression: a cadence-action mock has no respond/
+// fault body to serve an ordinary inbound frame with, so it must be SKIPPED
+// as a candidate for Execute/ExecuteProjected — not merely matched-and-then-
+// mishandled by the caller — so a lower-priority respond/fault mock on the
+// same path still gets its turn. Confirmed root cause of CB5-11's real-stack
+// symptom 2 ("any SUBSEQUENT connection's own GPS boot fails outright" while
+// a cadence override exists): a priority-100 override with no body condition
+// matched (and thereby swallowed) every inbound frame on cb5/gps, including
+// the firmware's own handshake, because candidateMatches never excluded
+// ActionCadence from ordinary resolution.
+func TestCadenceActionMocksAreInvisibleToOrdinaryFrameMatching(t *testing.T) {
+	repo := newFakeMockRepo()
+	cadenceOverride := domain.Mock{
+		ID: "override", Partition: "default", Priority: 100, CreatedAt: time.Unix(2, 0),
+		Match: domain.Match{Method: domain.StreamMethod, Path: "/gps"},
+		Action: domain.Action{Kind: domain.ActionCadence, Cadence: &domain.CadenceAction{
+			Frames: [][]domain.FramePart{{{Text: ptrString("OVERRIDE")}}},
+		}},
+	}
+	respond := domain.Mock{
+		ID: "handshake", Partition: "default", Priority: 0, CreatedAt: time.Unix(1, 0),
+		Match:  domain.Match{Method: domain.StreamMethod, Path: "/gps"},
+		Action: domain.Action{Kind: domain.ActionRespond, Respond: &domain.RespondAction{Body: []byte("PONG")}},
+	}
+	if err := repo.CreateMock(context.Background(), cadenceOverride); err != nil {
+		t.Fatalf("CreateMock(override): %v", err)
+	}
+	if err := repo.CreateMock(context.Background(), respond); err != nil {
+		t.Fatalf("CreateMock(respond): %v", err)
+	}
+
+	uc := NewMatchRequest(repo, &fakeSeededSource{}, alwaysMatchEval{}, scriptedEval{}, &fakeScenarioStateRepo{})
+	got, matched, err := uc.Execute(context.Background(), "default", MatchInput{Method: domain.StreamMethod, Path: "/gps"})
+	if err != nil {
+		t.Fatalf("Execute(): %v", err)
+	}
+	if !matched || got.ID != "handshake" {
+		t.Fatalf("Execute() = (%+v, %v), want the lower-priority respond mock \"handshake\" to win "+
+			"(the higher-priority cadence-action mock must be invisible here)", got, matched)
+	}
+
+	// ExecuteProjected must agree — it is the path the byte-stream plane
+	// actually calls for every inbound frame.
+	got, _, matched, err = uc.ExecuteProjected(context.Background(), "default",
+		MatchInput{Method: domain.StreamMethod, Path: "/gps"}, nil)
+	if err != nil {
+		t.Fatalf("ExecuteProjected(): %v", err)
+	}
+	if !matched || got.ID != "handshake" {
+		t.Fatalf("ExecuteProjected() = (%+v, %v), want \"handshake\" to win", got, matched)
+	}
+}

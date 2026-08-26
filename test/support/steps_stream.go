@@ -460,6 +460,48 @@ func (g *streamState) receivesFrame(want string) error {
 	return nil
 }
 
+// maxEventualFrames bounds receivesFrameEventually: a stand-in sharing its
+// connection with a continuously-ticking cadence cannot assume the frame it
+// wants is the very NEXT one — a cadence tick may legitimately interleave
+// ahead of it — so this discards non-matching frames instead of failing on
+// the first mismatch, up to a generous bound so a genuinely missing frame
+// still fails loudly rather than hanging.
+const maxEventualFrames = 500
+
+// receivesFrameEventually reads frames from the current stand-in, discarding
+// any that are not want, until want is seen or maxEventualFrames have been
+// read with no match. This is the general shape a stand-in needs whenever a
+// request/response exchange and an unrelated cadence share one connection —
+// exactly cb5/gps's real situation (CB5-11 correction round 1): the u-blox
+// handshake's answer and the position cadence's own ticks both cross the
+// same wire, in no guaranteed relative order.
+func (g *streamState) receivesFrameEventually(want string) error {
+	for i := 0; i < maxEventualFrames; i++ {
+		got, err := g.readFrame()
+		if err != nil {
+			return err
+		}
+		if got == want {
+			return nil
+		}
+	}
+	return fmt.Errorf("did not see the frame %q within %d frames", want, maxEventualFrames)
+}
+
+// standInDisconnects closes the current stand-in's own end of the
+// connection — the client-initiated mirror of observesConnectionClosing,
+// which only ever observes a SERVER-initiated close. Needed to prove a
+// FRESH connection (opened after some other event, e.g. a runtime mock
+// change) behaves correctly, without waiting on a reset or a fault to tear
+// the old one down.
+func (g *streamState) standInDisconnects() error {
+	si, err := g.current()
+	if err != nil {
+		return err
+	}
+	return si.conn.Close()
+}
+
 func (g *streamState) receivesFrameAfter(want, minimum string) error {
 	d, err := time.ParseDuration(minimum)
 	if err != nil {
@@ -830,9 +872,11 @@ func RegisterStreamSteps(sc *godog.ScenarioContext, s *appState) {
 	sc.Step(`^the stand-in sends "(\d+)" unterminated bytes$`, g.sendUnterminated)
 	sc.Step(`^the stand-in receives the frame "([^"]*)"$`, g.receivesFrame)
 	sc.Step(`^the stand-in receives the frame "([^"]*)" after at least "([^"]*)"$`, g.receivesFrameAfter)
+	sc.Step(`^the stand-in eventually receives the frame "([^"]*)"$`, g.receivesFrameEventually)
 	sc.Step(`^the stand-in receives the unterminated bytes "([^"]*)"$`, g.receivesUnterminated)
 	sc.Step(`^the stand-in receives nothing$`, g.receivesNothing)
 	sc.Step(`^the stand-in observes the connection closing$`, g.observesConnectionClosing)
+	sc.Step(`^the stand-in disconnects$`, g.standInDisconnects)
 
 	sc.Step(`^I inject the frame "(.*)" into endpoint "([^"]*)"$`, g.injectFrame)
 	sc.Step(`^the injection is rejected$`, g.injectionRejected)
