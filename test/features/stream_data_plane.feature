@@ -109,6 +109,41 @@ Feature: Generic byte-stream data plane
     And the stand-in receives the frame "LAST"
     And the stand-in receives the frame "LAST"
 
+  Scenario: A runtime cadence-override mock takes over a running cadence and reverts when deleted
+    Given a stream endpoint "ticker" delimited by CRLF emitting every "40ms":
+      """
+      ["[{\"text\":\"SEED\"}]"]
+      """
+    When a stand-in connects to endpoint "ticker"
+    Then the stand-in receives the frame "SEED"
+    When a stream mock "gps-override" for "/ticker" overriding the cadence with:
+      """
+      [{"text":"OVERRIDE"}]
+      """
+    Then the stand-in receives the frame "OVERRIDE"
+    And the stand-in receives the frame "OVERRIDE"
+    And the traffic log has an entry for "/ticker" with decision "mocked"
+    When I delete the mock "gps-override"
+    Then the stand-in receives the frame "SEED"
+
+  Scenario: A runtime cadence-override mock does not survive a space reset
+    Given a seeded stream endpoint "seeded-ticker" delimited by CRLF emitting every "40ms":
+      """
+      ["[{\"text\":\"SEED\"}]"]
+      """
+    And Lyrebird boots again
+    When a stand-in connects to endpoint "seeded-ticker"
+    Then the stand-in receives the frame "SEED"
+    When a stream mock "gps-override" for "/seeded-ticker" overriding the cadence with:
+      """
+      [{"text":"OVERRIDE"}]
+      """
+    Then the stand-in receives the frame "OVERRIDE"
+    When I reset the space "default"
+    Then the stand-in observes the connection closing
+    When a stand-in connects to endpoint "seeded-ticker"
+    Then the stand-in receives the frame "SEED"
+
   Scenario: An injected frame is delivered whole and recorded as unprompted
     Given a stream endpoint "widget" delimited by CRLF
     When a stand-in connects to endpoint "widget"

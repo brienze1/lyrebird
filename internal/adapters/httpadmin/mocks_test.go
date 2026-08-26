@@ -177,6 +177,47 @@ func TestCreateMockRejectsUnknownFieldInJSONBody(t *testing.T) {
 	}
 }
 
+// TestCadenceOverride_Validation covers WI-02's Test Plan item 2's "unknown
+// DTO field" case: DisallowUnknownFields applies recursively, so a field
+// inside action.cadence that CadenceActionDTO does not declare is rejected
+// exactly like an unknown top-level field is.
+func TestCadenceOverride_Validation(t *testing.T) {
+	uc := &fakeMockCreator{}
+	rr := httptest.NewRecorder()
+	body := `{"name":"override","match":{"method":"FRAME","path":"/cb5/gps"},` +
+		`"action":{"cadence":{"frames":["[{\"text\":\"GPRMC\"}]"],"totally_bogus_field":"oops"}}}`
+	CreateMock(uc)(rr, newPostRequest(t, "/__lyrebird/mocks", body))
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for an unknown field inside action.cadence", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "unknown field") {
+		t.Errorf("body = %q, want it to mention the unknown field", rr.Body.String())
+	}
+}
+
+// TestCreateMockAcceptsCadenceAction proves the happy path reaches the use
+// case with a converted domain.CadenceAction — the wire shape WI-03's steps
+// and journey will POST against.
+func TestCreateMockAcceptsCadenceAction(t *testing.T) {
+	uc := &fakeMockCreator{mock: domain.Mock{ID: "m1"}}
+	rr := httptest.NewRecorder()
+	body := `{"name":"override","priority":100,"match":{"method":"FRAME","path":"/cb5/gps"},` +
+		`"action":{"cadence":{"frames":["[{\"text\":\"GPRMC\"}]"]}}}`
+	CreateMock(uc)(rr, newPostRequest(t, "/__lyrebird/mocks", body))
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body: %s)", rr.Code, rr.Body)
+	}
+	if uc.got.Action.Kind != domain.ActionCadence || uc.got.Action.Cadence == nil {
+		t.Fatalf("use case received action %+v, want kind cadence", uc.got.Action)
+	}
+	if len(uc.got.Action.Cadence.Frames) != 1 {
+		t.Errorf("Frames = %+v, want one frame", uc.got.Action.Cadence.Frames)
+	}
+	if uc.got.Action.Cadence.Interval != nil {
+		t.Errorf("Interval = %v, want nil (content-only, inherit)", uc.got.Action.Cadence.Interval)
+	}
+}
+
 func TestCreateMockRejectsInvalidLifetimeInDTO(t *testing.T) {
 	uc := &fakeMockCreator{}
 	rr := httptest.NewRecorder()

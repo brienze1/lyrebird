@@ -16,6 +16,9 @@ import (
 	"time"
 
 	"github.com/cucumber/godog"
+	"gopkg.in/yaml.v3"
+
+	"github.com/brienze1/lyrebird/internal/adapters/dto"
 )
 
 // streamState holds the per-scenario byte-stream clients, sharing the booted
@@ -93,8 +96,46 @@ func (g *streamState) endpointWithCadence(name, interval string, frames *godog.D
 // scenario proves the seeded lifetime (reset-immune) rather than just the
 // declaration.
 func (g *streamState) seededEndpoint(name string) error {
-	yaml := fmt.Sprintf("space: default\nendpoints:\n  - name: %s\n    framing: {delimiter: \"\\r\\n\"}\n", name)
-	return os.WriteFile(filepath.Join(g.s.seedDir, "stream-seed.yaml"), []byte(yaml), 0o600)
+	body := fmt.Sprintf("space: default\nendpoints:\n  - name: %s\n    framing: {delimiter: \"\\r\\n\"}\n", name)
+	return os.WriteFile(filepath.Join(g.s.seedDir, "stream-seed.yaml"), []byte(body), 0o600)
+}
+
+// seededEndpointWithCadence is seededEndpoint's cadence-bearing sibling: a
+// seeded endpoint (protected from a space reset's DeleteEndpointsByPartition,
+// unlike an ephemeral one) whose declared cadence a WI-02 cadence-override
+// mock can then take over — the shape cb5/gps actually seeds in
+// config/cb5-local-stack.yaml, needed here so a reset-survival scenario can
+// prove the endpoint itself, and its connection, survive what the override
+// clearing does NOT survive.
+func (g *streamState) seededEndpointWithCadence(name, interval string, frames *godog.DocString) error {
+	var specs []string
+	if err := json.Unmarshal([]byte(frames.Content), &specs); err != nil {
+		return fmt.Errorf("parse cadence frames: %w", err)
+	}
+	cadenceFrames := make([][]dto.FramePartDTO, 0, len(specs))
+	for _, spec := range specs {
+		var parts []dto.FramePartDTO
+		if err := json.Unmarshal([]byte(spec), &parts); err != nil {
+			return fmt.Errorf("parse cadence frame %q: %w", spec, err)
+		}
+		cadenceFrames = append(cadenceFrames, parts)
+	}
+	file := struct {
+		Space     string            `yaml:"space"`
+		Endpoints []dto.EndpointDTO `yaml:"endpoints"`
+	}{
+		Space: "default",
+		Endpoints: []dto.EndpointDTO{{
+			Name:    name,
+			Framing: dto.FramingDTO{Delimiter: "\r\n"},
+			Cadence: &dto.CadenceDTO{Interval: interval, Frames: cadenceFrames},
+		}},
+	}
+	raw, err := yaml.Marshal(file)
+	if err != nil {
+		return fmt.Errorf("marshal seeded cadence endpoint: %w", err)
+	}
+	return os.WriteFile(filepath.Join(g.s.seedDir, "stream-cadence-seed.yaml"), raw, 0o600)
 }
 
 func (g *streamState) createEndpoint(name, space string, framing, projection, cadence map[string]any) error {
@@ -147,6 +188,89 @@ func (g *streamState) streamMockFaulting(name, path, kind string) error {
 func (g *streamState) streamMockFaultingWithDelay(name, path, kind, delayMS string) error {
 	fault := map[string]any{"kind": kind, "delay_ms": mustAtoi(delayMS)}
 	return g.createMock(name, path, "default", "", nil, fault, nil)
+}
+
+// streamMockOverridingCadence creates a runtime cadence-override mock
+// (WI-02): priority 100 so it outranks the endpoint's own seeded/declared
+// cadence at the usual seed priority, action.cadence.frames carrying ONE
+// frame spec — the consumer wire shape WI-03's steps and journey POST
+// against. body is the same declarative frame-spec JSON a mock's respond
+// body already accepts.
+func (g *streamState) streamMockOverridingCadence(name, path string, body *godog.DocString) error {
+	payload := map[string]any{
+		"name":     name,
+		"priority": 100,
+		"match":    map[string]any{"method": "FRAME", "path": path},
+		"action":   map[string]any{"cadence": map[string]any{"frames": []string{body.Content}}},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	resp, err := g.post("/__lyrebird/mocks", "default", raw)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("create cadence-override mock %q status = %d: %s", name, resp.StatusCode, b)
+	}
+	return nil
+}
+
+// deleteMockNamed looks the mock up by name (an ephemeral mock's server-
+// assigned id is never surfaced to a scenario) via GET /__lyrebird/mocks,
+// then DELETEs it — the revert path WI-02's Story names alongside
+// /__lyrebird/reset for restoring a cadence-override endpoint's seed.
+//
+// Both requests are built inline rather than through g.get/g.post: g.get's
+// only existing callers all pass "default" too, and a fifth identical call
+// tips golangci-lint's unparam check into flagging the parameter as always
+// the same value — this stays a self-contained two-request helper instead of
+// changing a shared helper's signature for a WI that isn't about it.
+func (g *streamState) deleteMockNamed(name string) error {
+	getReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		"http://"+g.s.app.ControlAddr()+"/__lyrebird/mocks", nil)
+	if err != nil {
+		return err
+	}
+	getReq.Header.Set("X-Lyrebird-Space", "default")
+	resp, err := http.DefaultClient.Do(getReq)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var mocks []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&mocks); err != nil {
+		return fmt.Errorf("decode mock listing: %w", err)
+	}
+	var id string
+	for _, m := range mocks {
+		if m["name"] == name {
+			id, _ = m["id"].(string)
+			break
+		}
+	}
+	if id == "" {
+		return fmt.Errorf("no mock named %q found to delete", name)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodDelete,
+		"http://"+g.s.app.ControlAddr()+"/__lyrebird/mocks/"+id, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Lyrebird-Space", "default")
+	delResp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = delResp.Body.Close() }()
+	if delResp.StatusCode != http.StatusNoContent {
+		b, _ := io.ReadAll(delResp.Body)
+		return fmt.Errorf("delete mock %q (id %s) status = %d: %s", name, id, delResp.StatusCode, b)
+	}
+	return nil
 }
 
 // projectsAt re-creates the last mock with a rule-level projection override —
@@ -682,6 +806,7 @@ func RegisterStreamSteps(sc *godog.ScenarioContext, s *appState) {
 	sc.Step(`^a stream endpoint "([^"]*)" delimited by CRLF splitting on "([^"]*)"$`, g.endpointWithSplit)
 	sc.Step(`^a stream endpoint "([^"]*)" delimited by CRLF emitting every "([^"]*)":$`, g.endpointWithCadence)
 	sc.Step(`^a seeded stream endpoint "([^"]*)" delimited by CRLF$`, g.seededEndpoint)
+	sc.Step(`^a seeded stream endpoint "([^"]*)" delimited by CRLF emitting every "([^"]*)":$`, g.seededEndpointWithCadence)
 
 	sc.Step(`^a stream mock "([^"]*)" for "([^"]*)" responding with:$`, g.streamMock)
 	sc.Step(`^a stream mock "([^"]*)" for "([^"]*)" in space "([^"]*)" responding with:$`, g.streamMockInSpace)
@@ -689,8 +814,10 @@ func RegisterStreamSteps(sc *godog.ScenarioContext, s *appState) {
 	sc.Step(`^a stream mock "([^"]*)" for "([^"]*)" responding with the script:$`, g.streamMockWithScript)
 	sc.Step(`^a stream mock "([^"]*)" for "([^"]*)" faulting with "([^"]*)"$`, g.streamMockFaulting)
 	sc.Step(`^a stream mock "([^"]*)" for "([^"]*)" faulting with "([^"]*)" of "([^"]*)" ms$`, g.streamMockFaultingWithDelay)
+	sc.Step(`^a stream mock "([^"]*)" for "([^"]*)" overriding the cadence with:$`, g.streamMockOverridingCadence)
 	sc.Step(`^the stream mock "([^"]*)" projects "([^"]*)" at offset (\d+) length (\d+) as "([^"]*)"$`, g.projectsAt)
 	sc.Step(`^creating a stream mock for "([^"]*)" with a proxy action is rejected$`, g.proxyMockIsRejected)
+	sc.Step(`^I delete the mock "([^"]*)"$`, g.deleteMockNamed)
 
 	sc.Step(`^a stand-in connects to endpoint "([^"]*)"$`, g.standInConnects)
 	sc.Step(`^a stand-in connects to endpoint "([^"]*)" in space "([^"]*)"$`, g.standInConnectsInSpace)

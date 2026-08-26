@@ -28,6 +28,16 @@ type trafficRecorder interface {
 	Execute(ctx context.Context, in usecase.RecordTrafficInput) (domain.TrafficRecord, error)
 }
 
+// cadenceResolver is the subset of *usecase.CadenceOverride this plane needs
+// at each cadence tick: which mock, if any, currently overrides an
+// endpoint's declared cadence. Nil whenever the byte-stream plane is built
+// without cadence-override support wired (e.g. a narrower unit test), in
+// which case a cadence always resolves to its declared content — today's
+// unmodified behaviour.
+type cadenceResolver interface {
+	Resolve(ctx context.Context, partition, endpoint string) (domain.Mock, bool, error)
+}
+
 // Handler turns one inbound frame into the existing match→respond decision
 // and records everything that crosses the wire. It holds no per-connection
 // state: everything it needs about a connection arrives as an argument, so
@@ -39,6 +49,7 @@ type Handler struct {
 	script  usecase.RespondScriptEval
 	bodyCap int64
 	clock   usecase.Clock
+	cadence cadenceResolver
 	log     *slog.Logger
 }
 

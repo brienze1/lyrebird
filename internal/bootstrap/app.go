@@ -90,25 +90,26 @@ type core struct {
 	seeds  seeds.Seeds
 	gcLoop *gc.Loop
 
-	setUpstreamUC    *usecase.SetUpstream
-	listUpstreamsUC  *usecase.ListUpstreams
-	recordTrafficUC  *usecase.RecordTraffic
-	listTrafficUC    *usecase.ListTraffic
-	getTrafficUC     *usecase.GetTraffic
-	clearTrafficUC   *usecase.ClearTraffic
-	matchRequestUC   *usecase.MatchRequest
-	matchTestUC      *usecase.MatchTest
-	mockCRUDUC       *usecase.MockCRUD
-	resetUC          *usecase.Reset
-	metricsUC        *usecase.Metrics
-	promoteTrafficUC *usecase.PromoteTraffic
-	createSpaceUC    *usecase.CreateSpace
-	listSpacesUC     *usecase.ListSpaces
-	deleteSpaceUC    *usecase.DeleteSpace
-	exportSeedsUC    *usecase.ExportSeeds
-	importSeedsUC    *usecase.ImportSeeds
-	endpointsUC      *usecase.Endpoints
-	emitFrameUC      *usecase.EmitFrame
+	setUpstreamUC     *usecase.SetUpstream
+	listUpstreamsUC   *usecase.ListUpstreams
+	recordTrafficUC   *usecase.RecordTraffic
+	listTrafficUC     *usecase.ListTraffic
+	getTrafficUC      *usecase.GetTraffic
+	clearTrafficUC    *usecase.ClearTraffic
+	matchRequestUC    *usecase.MatchRequest
+	matchTestUC       *usecase.MatchTest
+	mockCRUDUC        *usecase.MockCRUD
+	resetUC           *usecase.Reset
+	metricsUC         *usecase.Metrics
+	promoteTrafficUC  *usecase.PromoteTraffic
+	createSpaceUC     *usecase.CreateSpace
+	listSpacesUC      *usecase.ListSpaces
+	deleteSpaceUC     *usecase.DeleteSpace
+	exportSeedsUC     *usecase.ExportSeeds
+	importSeedsUC     *usecase.ImportSeeds
+	endpointsUC       *usecase.Endpoints
+	emitFrameUC       *usecase.EmitFrame
+	cadenceOverrideUC *usecase.CadenceOverride
 
 	// streamRegistry is nil unless cfg.StreamPlaneAddr is set. It is built
 	// here rather than inside the stream server because the reset and
@@ -196,6 +197,11 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 	matchRequestUC := usecase.NewMatchRequest(st, sd, matchEval, scriptEngine, st)
 	matchTestUC := usecase.NewMatchTest(st, sd, matchEval, templater, st)
 	mockCRUDUC := usecase.NewMockCRUD(st, sd, matchEval, scriptEngine, idgen.UUID{}, clock.System{}, st)
+	// Built unconditionally, same as matchRequestUC: it costs nothing when
+	// the byte-stream plane is disabled (cfg.StreamPlaneAddr == ""), since
+	// nothing ever calls it in that case — only streamplane.Deps.Cadence
+	// below is conditional on the plane actually listening.
+	cadenceOverrideUC := usecase.NewCadenceOverride(st, sd, matchEval)
 	endpointsUC := usecase.NewEndpoints(st, sd, connRegistry, clock.System{})
 	emitFrameUC := usecase.NewEmitFrame(endpointsUC, connRegistry)
 	resetUC := usecase.NewReset(st, st, st, st, connRegistry)
@@ -268,7 +274,7 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 		mockCRUDUC: mockCRUDUC, resetUC: resetUC, metricsUC: metricsUC, promoteTrafficUC: promoteTrafficUC,
 		createSpaceUC: createSpaceUC, listSpacesUC: listSpacesUC, deleteSpaceUC: deleteSpaceUC,
 		exportSeedsUC: exportSeedsUC, importSeedsUC: importSeedsUC,
-		endpointsUC: endpointsUC, emitFrameUC: emitFrameUC, streamRegistry: streamRegistry,
+		endpointsUC: endpointsUC, emitFrameUC: emitFrameUC, cadenceOverrideUC: cadenceOverrideUC, streamRegistry: streamRegistry,
 		templater: templater, scriptEngine: scriptEngine,
 		mitmCA: mitmCA, getMITMCACertUC: getMITMCACertUC,
 		authIssuer: authIssuer, issueTokenUC: issueTokenUC,
@@ -421,6 +427,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 			Match:     c.matchRequestUC,
 			Record:    c.recordTrafficUC,
 			Endpoints: c.endpointsUC,
+			Cadence:   c.cadenceOverrideUC,
 			// The SAME registry the emit_frame and reset use cases hold, so
 			// an injection reaches the connection this listener is serving
 			// and a reset closes it.

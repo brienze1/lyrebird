@@ -18,7 +18,7 @@ type mockInFields struct {
 	Name       string           `json:"name" jsonschema:"human-readable mock name"`
 	Match      dto.MatchDTO     `json:"match" jsonschema:"declarative match conditions (method/path/headers/query/body); empty matches every request"`
 	Script     *dto.ScriptDTO   `json:"script,omitempty" jsonschema:"optional sandboxed JS match/respond hooks — see the script_sandbox_api content resource"`
-	Action     dto.ActionDTO    `json:"action" jsonschema:"exactly one of respond/proxy/fault"`
+	Action     dto.ActionDTO    `json:"action" jsonschema:"exactly one of respond/proxy/fault/cadence — cadence overrides a stream endpoint's already-running cadence"`
 	Scenario   *dto.ScenarioDTO `json:"scenario,omitempty" jsonschema:"optional sequential responses (requires action kind respond) — successive matching calls return successive responses in order"`
 	Priority   int              `json:"priority,omitempty" jsonschema:"resolution priority; higher wins, ties broken by newest-created then id"`
 	Group      string           `json:"group,omitempty" jsonschema:"optional label for filtering list_mocks"`

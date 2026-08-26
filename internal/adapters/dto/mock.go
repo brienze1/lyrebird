@@ -58,12 +58,38 @@ type FaultDTO struct {
 	DelayMS *int   `json:"delay_ms,omitempty" yaml:"delay_ms,omitempty"`
 }
 
+// CadenceActionDTO is the wire shape of domain.CadenceAction — content-only
+// by default (WI-02 AC-3): Interval/OnExhaustion are optional and inherit
+// the endpoint's declared cadence when omitted. Interval is a *string
+// (unlike CadenceDTO.Interval, which is required) so "not present" and
+// "explicitly zero" stay distinct — a bare number would also silently mean
+// nanoseconds through encoding/json, the same trap CadenceDTO's own doc
+// comment calls out.
+//
+// Frames is frame-spec STRINGS — mirroring mcp.CadenceIn.Frames and
+// EmitFrameIn.Frame, NOT CadenceDTO.Frames' structured [][]FramePartDTO —
+// because ActionDTO, unlike EndpointDTO, is reused VERBATIM as an MCP tool's
+// Go input type (mockInFields.Action; the Admin-REST-is-a-thin-twin-of-MCP
+// rule), and FramePartDTO is self-referential through Repeat: the MCP SDK's
+// schema generator rejects a recursive type outright (confirmed by
+// create_mock's own registration panicking, "cycle detected for type
+// dto.FramePartDTO", the first time this field was structured). Each string
+// is one frame's spec, the same declarative grammar a mock's respond body,
+// emit_frame, and a cadence declaration's frames all already use.
+type CadenceActionDTO struct {
+	Interval     *string  `json:"interval,omitempty" yaml:"interval,omitempty"`
+	OnExhaustion string   `json:"on_exhaustion,omitempty" yaml:"on_exhaustion,omitempty"`
+	Frames       []string `json:"frames" yaml:"frames"`
+}
+
 // ActionDTO is the wire shape of domain.Action: exactly one of
-// Respond/Proxy/Fault is set, and that presence selects the ActionKind.
+// Respond/Proxy/Fault/Cadence is set, and that presence selects the
+// ActionKind.
 type ActionDTO struct {
-	Respond *RespondDTO `json:"respond,omitempty" yaml:"respond,omitempty"`
-	Proxy   *ProxyDTO   `json:"proxy,omitempty" yaml:"proxy,omitempty"`
-	Fault   *FaultDTO   `json:"fault,omitempty" yaml:"fault,omitempty"`
+	Respond *RespondDTO       `json:"respond,omitempty" yaml:"respond,omitempty"`
+	Proxy   *ProxyDTO         `json:"proxy,omitempty" yaml:"proxy,omitempty"`
+	Fault   *FaultDTO         `json:"fault,omitempty" yaml:"fault,omitempty"`
+	Cadence *CadenceActionDTO `json:"cadence,omitempty" yaml:"cadence,omitempty"`
 }
 
 // ScriptDTO is the wire shape of domain.Script.
@@ -208,13 +234,14 @@ func MatchToDTO(m domain.Match) MatchDTO {
 // set.
 func ActionFromDTO(d ActionDTO) (domain.Action, error) {
 	set := 0
-	for _, isSet := range []bool{d.Respond != nil, d.Proxy != nil, d.Fault != nil} {
+	for _, isSet := range []bool{d.Respond != nil, d.Proxy != nil, d.Fault != nil, d.Cadence != nil} {
 		if isSet {
 			set++
 		}
 	}
 	if set > 1 {
-		return domain.Action{}, fmt.Errorf("%w: exactly one of action.respond/action.proxy/action.fault may be set", domain.ErrInvalidMock)
+		return domain.Action{}, fmt.Errorf(
+			"%w: exactly one of action.respond/action.proxy/action.fault/action.cadence may be set", domain.ErrInvalidMock)
 	}
 
 	switch {
@@ -232,6 +259,12 @@ func ActionFromDTO(d ActionDTO) (domain.Action, error) {
 		return domain.Action{Kind: domain.ActionFault, Fault: &domain.FaultAction{
 			Kind: domain.FaultKind(d.Fault.Kind), DelayMS: d.Fault.DelayMS,
 		}}, nil
+	case d.Cadence != nil:
+		cadence, err := CadenceActionFromDTO(d.Cadence)
+		if err != nil {
+			return domain.Action{}, err
+		}
+		return domain.Action{Kind: domain.ActionCadence, Cadence: cadence}, nil
 	default:
 		return domain.Action{}, domain.ErrInvalidMock
 	}
@@ -261,6 +294,11 @@ func ActionToDTO(a domain.Action) ActionDTO {
 			return ActionDTO{}
 		}
 		return ActionDTO{Fault: &FaultDTO{Kind: string(a.Fault.Kind), DelayMS: a.Fault.DelayMS}}
+	case domain.ActionCadence:
+		if a.Cadence == nil {
+			return ActionDTO{}
+		}
+		return ActionDTO{Cadence: CadenceActionToDTO(a.Cadence)}
 	default:
 		return ActionDTO{}
 	}

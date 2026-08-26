@@ -39,7 +39,12 @@ type Deps struct {
 	DefaultSpace string
 	BodyCapBytes int64
 	Clock        usecase.Clock
-	Log          *slog.Logger
+	// Cadence resolves, per tick, which mock (if any) currently overrides a
+	// stream endpoint's declared cadence. Nil disables cadence overrides
+	// entirely — every cadence then always emits its declared content, the
+	// plane's original behaviour.
+	Cadence cadenceResolver
+	Log     *slog.Logger
 }
 
 // Server is the byte-stream data-plane listener. It accepts TCP connections,
@@ -82,6 +87,7 @@ func New(d Deps) *Server {
 			script:  d.Script,
 			bodyCap: d.BodyCapBytes,
 			clock:   d.Clock,
+			cadence: d.Cadence,
 			log:     log,
 		},
 	}
