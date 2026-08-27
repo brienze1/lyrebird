@@ -491,3 +491,95 @@ func TestMockCRUDListFiltersByGroup(t *testing.T) {
 		t.Fatalf("List(group=checkout) = %+v, want just [in-group]", list)
 	}
 }
+
+// TestCadenceOverride_Validation mirrors validateCadence's own declaration-
+// time rules (negative interval, empty frames, unknown on_exhaustion) plus
+// the one a cadence declaration does not need: a repeat part's Times must
+// still be bounded, since an override's frames use the same byte-stream
+// frame grammar a rule's respond body does (WI-02's Test Plan item 2).
+func TestCadenceOverride_Validation(t *testing.T) {
+	oneFrame := [][]domain.FramePart{{{Text: ptrString("GPRMC")}}}
+
+	tests := []struct {
+		name   string
+		action domain.CadenceAction
+	}{
+		{
+			name:   "negative interval",
+			action: domain.CadenceAction{Interval: ptrDuration(-1 * time.Millisecond), Frames: oneFrame},
+		},
+		{
+			name:   "empty frames",
+			action: domain.CadenceAction{Frames: nil},
+		},
+		{
+			name:   "unknown on_exhaustion",
+			action: domain.CadenceAction{Frames: oneFrame, OnExhaust: "bogus"},
+		},
+		{
+			name: "oversized repeat",
+			action: domain.CadenceAction{Frames: [][]domain.FramePart{
+				{{Repeat: &domain.FramePart{Text: ptrString("x")}, Times: 1 << 17}},
+			}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			uc, _ := newCRUD()
+			_, err := uc.Create(context.Background(), MockInput{
+				Partition: "default", Name: "override",
+				Match:  domain.Match{Method: domain.StreamMethod, Path: "/cb5/gps"},
+				Action: domain.Action{Kind: domain.ActionCadence, Cadence: &tt.action},
+			})
+			if !errors.Is(err, domain.ErrInvalidMock) {
+				t.Fatalf("Create() with %s = %v, want ErrInvalidMock", tt.name, err)
+			}
+		})
+	}
+}
+
+// TestCadenceOverride_InheritsDeclaredPacing proves the content-only default
+// (WI-02 AC-3): an override that never sets interval/on_exhaustion is
+// accepted as-is by declaration-time validation — inheritance itself is a
+// streamplane-level merge (cadence_test.go), this only proves the omission
+// is not itself rejected.
+func TestCadenceOverride_InheritsDeclaredPacing(t *testing.T) {
+	uc, _ := newCRUD()
+	m, err := uc.Create(context.Background(), MockInput{
+		Partition: "default", Name: "override",
+		Match: domain.Match{Method: domain.StreamMethod, Path: "/cb5/gps"},
+		Action: domain.Action{Kind: domain.ActionCadence, Cadence: &domain.CadenceAction{
+			Frames: [][]domain.FramePart{{{Text: ptrString("GPRMC")}}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Create() with content-only cadence action: %v", err)
+	}
+	if m.Action.Cadence.Interval != nil {
+		t.Errorf("Action.Cadence.Interval = %v, want nil (inherit)", m.Action.Cadence.Interval)
+	}
+	if m.Action.Cadence.OnExhaust != "" {
+		t.Errorf("Action.Cadence.OnExhaust = %q, want empty (inherit)", m.Action.Cadence.OnExhaust)
+	}
+}
+
+// TestCadenceOverride_RejectsOnNonStreamRule mirrors validateStreamRule's
+// existing proxy-on-stream refusal: a cadence action requires the stream
+// method (or an empty, catch-all one), since it has no meaning against any
+// other data plane.
+func TestCadenceOverride_RejectsOnNonStreamRule(t *testing.T) {
+	uc, _ := newCRUD()
+	_, err := uc.Create(context.Background(), MockInput{
+		Partition: "default", Name: "override",
+		Match: domain.Match{Method: "GET", Path: "/cb5/gps"},
+		Action: domain.Action{Kind: domain.ActionCadence, Cadence: &domain.CadenceAction{
+			Frames: [][]domain.FramePart{{{Text: ptrString("GPRMC")}}},
+		}},
+	})
+	if !errors.Is(err, domain.ErrInvalidMock) {
+		t.Fatalf("Create() with a cadence action on a GET rule = %v, want ErrInvalidMock", err)
+	}
+}
+
+func ptrString(s string) *string                 { return &s }
+func ptrDuration(d time.Duration) *time.Duration { return &d }

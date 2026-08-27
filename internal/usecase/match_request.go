@@ -128,14 +128,33 @@ func (uc *MatchRequest) ExecuteProjected(
 	return domain.Mock{}, base, false, nil
 }
 
-// candidateMatches evaluates one candidate: declarative conditions first
-// (cheapest), then scenario exhaustion, then the AND-composed script gate —
-// so a candidate whose declarative Match never passes is never sandboxed at
-// all. Shared by Execute and ExecuteProjected so the two can never drift on
-// precedence, exhaustion or fail-safe script semantics.
+// candidateMatches evaluates one candidate: cadence-action exclusion first
+// (cheapest and unconditional), then declarative conditions, then scenario
+// exhaustion, then the AND-composed script gate — so a candidate whose
+// declarative Match never passes is never sandboxed at all. Shared by
+// Execute and ExecuteProjected so the two can never drift on precedence,
+// exhaustion, cadence exclusion or fail-safe script semantics.
+//
+// A `cadence` action is CB5-11 correction round 1's regression: it overrides
+// what a stream endpoint's cadence emits (usecase.CadenceOverride.Resolve,
+// consulted by the byte-stream plane once per tick), and has no respond/
+// fault body an ordinary inbound frame could ever be answered with. Skipping
+// it here — rather than letting it win the candidate loop and only failing
+// gracefully in the caller — is what lets resolution fall through to the
+// next-highest candidate, exactly as an exhausted fallthrough scenario
+// candidate already does below. Without this, a higher-priority
+// cadence-action mock silently swallows every inbound frame on its endpoint
+// (recorded internal-error, no answer written), which is precisely what
+// broke a real device's own handshake on cb5/gps while an override mock
+// existed: the override's own Match had no body condition narrowing it to
+// cadence resolution alone, so it also won ordinary frame-answer resolution
+// ahead of the seeded respond mocks that should have answered instead.
 func (uc *MatchRequest) candidateMatches(
 	ctx context.Context, partition string, m domain.Mock, in MatchInput,
 ) (bool, error) {
+	if m.Action.Kind == domain.ActionCadence {
+		return false, nil
+	}
 	if ok, _ := uc.match.Matches(m.Match, in); !ok {
 		return false, nil
 	}

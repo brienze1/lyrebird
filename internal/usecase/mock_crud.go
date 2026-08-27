@@ -104,7 +104,8 @@ func scenarioWithDefault(sc *domain.Scenario) *domain.Scenario {
 }
 
 // validateStreamRule rejects, at write time, the two things a byte-stream
-// rule cannot be (003's FR-025, data-model.md §10).
+// rule cannot be (003's FR-025, data-model.md §10), plus the one thing a
+// cadence-override action can ONLY be.
 //
 // A `proxy` action is the important one: the other planes forward to a real
 // upstream, but a stream endpoint exists precisely so that no device is
@@ -119,6 +120,12 @@ func scenarioWithDefault(sc *domain.Scenario) *domain.Scenario {
 // is not assumed to be a stream rule: it may legitimately be a catch-all that
 // also covers HTTP, and refusing a proxy action on those would break the
 // existing planes.
+//
+// A cadence action is the mirror image: it overrides a stream endpoint's
+// running cadence and has no meaning on any other data plane, so it is
+// refused whenever match.method is explicitly set to something OTHER than
+// the stream method — the same "only refuse when definitely known, never
+// on a path-only catch-all" discipline the proxy check above uses.
 func validateStreamRule(in MockInput) error {
 	isStream := in.Match.Method == domain.StreamMethod
 	if isStream && in.Action.Kind == domain.ActionProxy {
@@ -126,6 +133,13 @@ func validateStreamRule(in MockInput) error {
 			"%w: a %s rule cannot use action proxy — the byte-stream plane has no upstream to forward to "+
 				"(a stand-in exists so that no device is attached); use respond or fault instead",
 			domain.ErrInvalidMock, domain.StreamMethod,
+		)
+	}
+	if in.Action.Kind == domain.ActionCadence && in.Match.Method != "" && in.Match.Method != domain.StreamMethod {
+		return fmt.Errorf(
+			"%w: action cadence overrides a stream endpoint's running cadence — it requires match.method %q "+
+				"(or an empty, catch-all method), not %q",
+			domain.ErrInvalidMock, domain.StreamMethod, in.Match.Method,
 		)
 	}
 	return validateProjection(in.Projection)
@@ -180,10 +194,69 @@ func validateAction(a domain.Action) error {
 		default:
 			return fmt.Errorf("%w: unknown fault.kind %q", domain.ErrInvalidMock, a.Fault.Kind)
 		}
+	case domain.ActionCadence:
+		if a.Cadence == nil {
+			return fmt.Errorf("%w: action kind cadence requires a cadence body", domain.ErrInvalidMock)
+		}
+		if err := validateCadenceAction(a.Cadence); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("%w: unknown action kind %q", domain.ErrInvalidMock, a.Kind)
 	}
 	return nil
+}
+
+// maxCadenceActionRepeatTimes bounds a single repeat part inside a cadence
+// override's frames, at write time. It intentionally duplicates
+// streamplane's own build-time bound (build.go's maxRepeatTimes) rather than
+// importing it — usecase cannot import internal/adapters/* (Clean
+// Architecture's inward-only dependency rule) — mirroring the precedent
+// cadence.go's runCadence already sets for interval/frames: rejected at
+// write time here, guarded again where the frame is actually built, so a
+// hand-edited store row cannot misbehave either way.
+const maxCadenceActionRepeatTimes = 1 << 16
+
+// validateCadenceAction mirrors validateCadence's own declaration-time rules
+// (negative interval, empty frames, unknown on_exhaustion) — Interval and
+// OnExhaust are optional here (nil/empty means "inherit the endpoint's
+// declared cadence," WI-02 AC-3's content-only default), so only an
+// EXPLICITLY negative interval or an explicitly unknown on_exhaustion is
+// rejected. It additionally bounds a repeat part's Times, since an
+// override's frames use the same byte-stream frame grammar a rule's respond
+// body does.
+func validateCadenceAction(a *domain.CadenceAction) error {
+	if a.Interval != nil && *a.Interval < 0 {
+		return fmt.Errorf("%w: action.cadence.interval must not be negative", domain.ErrInvalidMock)
+	}
+	if len(a.Frames) == 0 {
+		return fmt.Errorf("%w: action.cadence.frames must not be empty", domain.ErrInvalidMock)
+	}
+	switch a.OnExhaust {
+	case domain.OnExhaustionRepeatLast, domain.OnExhaustionLoop, domain.OnExhaustionStop, "":
+	default:
+		return fmt.Errorf("%w: unknown action.cadence.on_exhaustion %q (want repeat_last, loop or stop)",
+			domain.ErrInvalidMock, a.OnExhaust)
+	}
+	for _, frame := range a.Frames {
+		for _, part := range frame {
+			if err := validateCadenceActionRepeat(part); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateCadenceActionRepeat(p domain.FramePart) error {
+	if p.Repeat == nil {
+		return nil
+	}
+	if p.Times > maxCadenceActionRepeatTimes {
+		return fmt.Errorf("%w: action.cadence repeat times %d exceeds the maximum of %d",
+			domain.ErrInvalidMock, p.Times, maxCadenceActionRepeatTimes)
+	}
+	return validateCadenceActionRepeat(*p.Repeat)
 }
 
 // Create validates and persists a new ephemeral mock. Empty Match matches

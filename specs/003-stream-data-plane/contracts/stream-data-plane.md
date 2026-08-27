@@ -82,6 +82,56 @@ Both go through the connection's single writer goroutine, so an emission never i
 answer or with another emission, and the emitted order is the delivered order (FR-033). Both are
 recorded with `method: EMIT` (FR-013).
 
+## Runtime cadence override
+
+An ordinary mock may carry a third action kind, `cadence`, that overrides — at runtime and
+reversibly — what an endpoint's **already-declared, already-running** cadence sustains, instead of
+its own declared content. Motivating case: a seeded cadence with no clock of its own (e.g. a 2ms
+"immediate-ish" repeater) cannot be redeclared or out-shouted by a one-shot injection once a
+stand-in occupies it; a runtime override is the only way to make a scenario-chosen value the
+*sustained* content of a cadence that is already ticking.
+
+```json
+{
+  "name": "gps-override",
+  "priority": 100,
+  "match": { "method": "FRAME", "path": "/cb5/gps" },
+  "action": {
+    "cadence": {
+      "frames": ["[{\"text\":\"$GPRMC,...*hh\\r\"}]"]
+    }
+  }
+}
+```
+
+- **Resolution**: per tick, not per connection — the connection's single writer resolves the
+  winning `cadence`-action mock for the endpoint fresh each time (same total order as every other
+  mock kind: priority desc, `created_at` desc, id — a runtime ephemeral outranks a seed at equal
+  priority), and falls back to the endpoint's own declared cadence when none matches. Picked up by
+  an already-open connection — no re-occupancy, no reconnect.
+- **Content-only by default**: `action.cadence.frames` is the one field an override always sets.
+  `interval`/`on_exhaustion` are optional and inherit the endpoint's declared cadence's values when
+  omitted — the common case changes only WHAT is sustained, never the pacing or exhaustion rule.
+- **Frames are spec STRINGS, not structured parts** (`action.cadence.frames: []string`, each a
+  frame spec — the same grammar a respond body, `emit_frame` and a cadence declaration's own frames
+  already use), unlike a cadence *declaration*'s structured `[][]{text,hex,int,...}` shape. This is
+  forced by MCP: `action` is the exact same `dto.ActionDTO` `create_mock`/`update_mock` already
+  expose (the Admin-REST-is-a-thin-twin-of-MCP rule), and `FramePartDTO` is self-referential through
+  `repeat` — the MCP SDK's schema generator rejects a recursive Go type outright, exactly the
+  constraint `CadenceIn.Frames` and `EmitFrameIn.Frame` already work around.
+- **Reverting**: deleting the override mock (`delete_mock` / `DELETE /__lyrebird/mocks/{id}`) hands
+  the endpoint straight back to its declared cadence on the very next tick, on the SAME connection —
+  no reconnect. `reset` also clears the ephemeral override, but — being a whole-space reset — it
+  additionally closes every live connection and removes every session-created endpoint in that space
+  exactly as it always has ("Reset, GC, spaces" below); a scenario that wants the connection itself
+  to survive reverting the content uses delete, not reset.
+- **Recording is unchanged**: an overridden tick is recorded exactly like a seeded one
+  (`method: EMIT`, `decision: mocked`) — overriding what a cadence emits changes the content, never
+  the traffic shape.
+- **Only meaningful on a stream rule**: `action.cadence` on a rule whose `match.method` is
+  explicitly something other than `FRAME` is rejected at write time, mirroring the existing `proxy`
+  refusal above.
+
 ## Control-plane surface
 
 No new surface — new operations on the existing MCP server and its Admin REST twin, business logic

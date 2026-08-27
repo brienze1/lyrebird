@@ -134,7 +134,7 @@ A bare JSON array is accepted as shorthand for `{"parts": [...]}`.
 | --- | --- |
 | `domain.Mock` | A stream rule **is** a mock. `match.path` = `/<endpoint>`, `match.method` = `FRAME`, `match.body` = JSONPath conditions over the envelope. Two additive fields (§9), no new type. |
 | `domain.Match` | `Method`, `Path`, `Headers`, `Query`, `Body` — all as they are. `Headers` carries the handshake keys. |
-| `domain.Action` | `respond` (the frame spec of §5) and `fault`. `proxy` is rejected at creation. |
+| `domain.Action` | `respond` (the frame spec of §5), `fault`, and `cadence` (WI-02: a runtime, reversible override of an endpoint's already-declared, already-running cadence — see the "Runtime cadence override" section of `contracts/stream-data-plane.md`). `proxy` is rejected at creation. |
 | `domain.FaultKind` | `delay` → slow line · `reset` → dropped connection · `timeout` → silence · `malformed` → corrupted bytes. All four map without addition (FR-016). |
 | `domain.Script` | `MatchSrc` gates the match; `RespondSrc` builds the frame. Both under `LYREBIRD_SCRIPT_TIMEOUT`. |
 | `usecase.MatchInput` | `{Method:"FRAME", Path:"/<endpoint>", Host:"stream", Header:<handshake>, Body:<envelope>}` |
@@ -190,3 +190,9 @@ Applied by an idempotent `ALTER TABLE … ADD COLUMN` guarded by `PRAGMA table_i
   before boundaries exist in some orders) but reported by the endpoint listing as unreachable.
 - A rule with `action.proxy` whose `match.method` is `FRAME` is rejected at creation with an
   explanatory error, rather than failing at serve time (FR-025).
+- A rule with `action.cadence` must itself declare a non-negative `interval` (when set — omitted
+  inherits the endpoint's), a non-empty `frames` list, and a known `on_exhaustion` (when set) — the
+  same rules a cadence declaration enforces (§10 above), plus a bound on a `repeat` part's `times`
+  the endpoint-level declaration does not need (WI-02). A rule with `action.cadence` whose
+  `match.method` is explicitly something other than `FRAME` is rejected at creation, mirroring the
+  `proxy` rule above.

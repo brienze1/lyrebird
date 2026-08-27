@@ -109,6 +109,76 @@ Feature: Generic byte-stream data plane
     And the stand-in receives the frame "LAST"
     And the stand-in receives the frame "LAST"
 
+  Scenario: A runtime cadence-override mock takes over a running cadence and reverts when deleted
+    Given a stream endpoint "ticker" delimited by CRLF emitting every "40ms":
+      """
+      ["[{\"text\":\"SEED\"}]"]
+      """
+    When a stand-in connects to endpoint "ticker"
+    Then the stand-in receives the frame "SEED"
+    When a stream mock "gps-override" for "/ticker" overriding the cadence with:
+      """
+      [{"text":"OVERRIDE"}]
+      """
+    Then the stand-in receives the frame "OVERRIDE"
+    And the stand-in receives the frame "OVERRIDE"
+    And the traffic log has an entry for "/ticker" with decision "mocked"
+    When I delete the mock "gps-override"
+    Then the stand-in receives the frame "SEED"
+
+  Scenario: A runtime cadence-override mock does not survive a space reset
+    Given a seeded stream endpoint "seeded-ticker" delimited by CRLF emitting every "40ms":
+      """
+      ["[{\"text\":\"SEED\"}]"]
+      """
+    And Lyrebird boots again
+    When a stand-in connects to endpoint "seeded-ticker"
+    Then the stand-in receives the frame "SEED"
+    When a stream mock "gps-override" for "/seeded-ticker" overriding the cadence with:
+      """
+      [{"text":"OVERRIDE"}]
+      """
+    Then the stand-in receives the frame "OVERRIDE"
+    When I reset the space "default"
+    Then the stand-in observes the connection closing
+    When a stand-in connects to endpoint "seeded-ticker"
+    Then the stand-in receives the frame "SEED"
+
+  # CB5-11 correction round 1: mirrors cb5/gps reality exactly — a declared
+  # 2ms/one-frame/repeat_last cadence carrying real inbound traffic (a
+  # u-blox-style handshake answered by an ordinary, lower-priority respond
+  # mock) on an already-open connection, then a priority-100 cadence-override
+  # posted while that connection is live. Proves BOTH that the override takes
+  # over the cadence (a) and that inbound frames keep getting their seeded
+  # answers throughout — on the SAME connection and on one opened AFTER the
+  # override (b), which is the exact situation the device's own GPS boot gate
+  # is in for every real scenario.
+  Scenario: A cadence-override mock does not swallow inbound frames still answered by other mocks
+    Given a stream endpoint "gps" delimited by CRLF emitting every "2ms":
+      """
+      ["[{\"text\":\"$GPRMC,120000.00,A,0000.000,N,00000.000,E,000.0,000.0,010120,,,A*5F\"}]"]
+      """
+    And a stream mock "gps-handshake" for "/gps" responding with:
+      """
+      [{"text":"PONG"}]
+      """
+    When a stand-in connects to endpoint "gps"
+    Then the stand-in receives the frame "$GPRMC,120000.00,A,0000.000,N,00000.000,E,000.0,000.0,010120,,,A*5F"
+    When the stand-in sends the frame "PING"
+    Then the stand-in eventually receives the frame "PONG"
+    When a stream mock "gps-override" for "/gps" overriding the cadence with:
+      """
+      [{"text":"$GPRMC,120000.00,A,0000.000,N,00000.000,E,050.0,000.0,010120,,,A*5F"}]
+      """
+    Then the stand-in eventually receives the frame "$GPRMC,120000.00,A,0000.000,N,00000.000,E,050.0,000.0,010120,,,A*5F"
+    When the stand-in sends the frame "PING"
+    Then the stand-in eventually receives the frame "PONG"
+    When the stand-in disconnects
+    And a stand-in connects to endpoint "gps"
+    Then the handshake is accepted
+    When the stand-in sends the frame "PING"
+    Then the stand-in eventually receives the frame "PONG"
+
   Scenario: An injected frame is delivered whole and recorded as unprompted
     Given a stream endpoint "widget" delimited by CRLF
     When a stand-in connects to endpoint "widget"

@@ -235,6 +235,61 @@ func CadenceFromDTO(d *CadenceDTO) (*domain.Cadence, error) {
 	return out, nil
 }
 
+// CadenceActionToDTO is nil-safe. Frames are rendered as spec STRINGS (see
+// CadenceActionDTO's doc comment) via the same json.Marshal CadenceToSpecs
+// uses; the error that call could theoretically return is discarded rather
+// than threading a "cannot happen" error return through ActionToDTO/
+// MockToDTO (which have none today) — FramePartDTO's fields are all
+// string/int64/nested-FramePartDTO, none of which json.Marshal ever fails
+// on.
+func CadenceActionToDTO(c *domain.CadenceAction) *CadenceActionDTO {
+	if c == nil {
+		return nil
+	}
+	out := &CadenceActionDTO{OnExhaustion: string(c.OnExhaust)}
+	if c.Interval != nil {
+		s := c.Interval.String()
+		out.Interval = &s
+	}
+	for _, frame := range c.Frames {
+		parts := make([]FramePartDTO, 0, len(frame))
+		for _, p := range frame {
+			parts = append(parts, framePartToDTO(p))
+		}
+		raw, _ := json.Marshal(parts)
+		out.Frames = append(out.Frames, string(raw))
+	}
+	return out
+}
+
+// CadenceActionFromDTO is nil-safe and parses Interval explicitly, mirroring
+// CadenceFromDTO — but Interval is OPTIONAL here (nil means "inherit the
+// endpoint's declared interval"), unlike a cadence declaration's Interval,
+// which is always required. Frames are parsed with FramePartsFromJSON, the
+// same spec-string grammar CadenceFromSpecs (MCP's create_endpoint) and
+// emit_frame already use.
+func CadenceActionFromDTO(d *CadenceActionDTO) (*domain.CadenceAction, error) {
+	if d == nil {
+		return nil, nil
+	}
+	out := &domain.CadenceAction{OnExhaust: domain.OnExhaustion(d.OnExhaustion)}
+	if d.Interval != nil {
+		parsed, err := time.ParseDuration(*d.Interval)
+		if err != nil {
+			return nil, fmt.Errorf("action.cadence.interval %q is not a duration (e.g. 100ms): %w", *d.Interval, err)
+		}
+		out.Interval = &parsed
+	}
+	for _, spec := range d.Frames {
+		parts, err := FramePartsFromJSON(spec)
+		if err != nil {
+			return nil, err
+		}
+		out.Frames = append(out.Frames, parts)
+	}
+	return out, nil
+}
+
 func framePartToDTO(p domain.FramePart) FramePartDTO {
 	d := FramePartDTO{
 		Text: p.Text, Hex: p.Hex, Int: p.Int, CopyFrom: p.CopyFrom,
