@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net/textproto"
 	"sync"
 	"testing"
 	"time"
@@ -250,5 +251,106 @@ func TestFrameProjectorPrefersTheRuleOverTheEndpointDefault(t *testing.T) {
 	}
 	if string(again) != string(own) {
 		t.Error("the memoised envelope differs from the first projection of the same rule")
+	}
+}
+
+// ---------------------------------------------------------- emission answers
+// CB5-15 WI-04: a rule may answer a frame emitted onto the connection —
+// conn.emit's own write, going the opposite direction from an ordinary
+// inbound frame — instead of it reaching the stand-in untouched.
+
+// TestHandlerAnswersAnOptedInEmission is Test Plan item 1: on a matched
+// respond rule, handleEmission answers inline (returns true) and records
+// exactly two entries — EMIT/mocked/mock-id for what was emitted, then
+// IN/mocked/same-mock-id for the rule's own built frame, which must be the
+// answer's bytes, never the emitted ones.
+func TestHandlerAnswersAnOptedInEmission(t *testing.T) {
+	rec := &capturingRecorder{}
+	c, _ := newTestConn(t)
+	c.handler = newTestHandlerWith(stubMatcher{mock: respondMock("emit1", `[{"text":"ANSWERED"}]`), matched: true}, rec)
+
+	answered := c.handler.handleEmission(context.Background(), c, []byte("PUSHED\r\n"))
+
+	if !answered {
+		t.Fatalf("handleEmission() = false, want true for a matched respond rule")
+	}
+	if len(rec.records) != 2 {
+		t.Fatalf("wrote %d record(s), want 2 (EMIT then IN)", len(rec.records))
+	}
+
+	emit, in := rec.records[0], rec.records[1]
+	if emit.Method != domain.StreamDirectionEmit {
+		t.Errorf("first record method = %q, want %q", emit.Method, domain.StreamDirectionEmit)
+	}
+	if emit.Decision != domain.DecisionMocked || emit.MatchedMockID == nil || *emit.MatchedMockID != "emit1" {
+		t.Errorf("first record (decision=%q, mockID=%v), want (mocked, \"emit1\")", emit.Decision, emit.MatchedMockID)
+	}
+	if string(emit.ResponseBody) != "PUSHED\r\n" {
+		t.Errorf("first record's frame = %q, want the emitted bytes %q", emit.ResponseBody, "PUSHED\r\n")
+	}
+
+	if in.Method != domain.StreamDirectionIn {
+		t.Errorf("second record method = %q, want %q", in.Method, domain.StreamDirectionIn)
+	}
+	if in.Decision != domain.DecisionMocked || in.MatchedMockID == nil || *in.MatchedMockID != "emit1" {
+		t.Errorf("second record (decision=%q, mockID=%v), want (mocked, \"emit1\")", in.Decision, in.MatchedMockID)
+	}
+	if string(in.RequestBody) != "ANSWERED\r\n" {
+		t.Errorf("second record's body = %q, want the rule's BUILT frame, not the emitted one", in.RequestBody)
+	}
+}
+
+// TestHandlerLeavesAnUnmatchedEmissionAlone mirrors
+// TestHandlerUnmatchedFrameIsSilentAndRecorded: no rule opted in, so
+// handleEmission reports it did not answer and writes nothing at all — the
+// pass-through EMIT record stays conn.emit's own job.
+func TestHandlerLeavesAnUnmatchedEmissionAlone(t *testing.T) {
+	rec := &capturingRecorder{}
+	c, _ := newTestConn(t)
+	c.handler = newTestHandlerWith(stubMatcher{matched: false}, rec)
+
+	answered := c.handler.handleEmission(context.Background(), c, []byte("PUSHED\r\n"))
+
+	if answered {
+		t.Error("handleEmission() = true for an unmatched emission, want false")
+	}
+	if len(rec.records) != 0 {
+		t.Errorf("wrote %d record(s) for an unmatched emission, want 0 (conn.emit records the pass-through)", len(rec.records))
+	}
+}
+
+// TestEmissionHeaderCarriesTheCanonicalMarkerAndDoesNotMutateTheConnection is
+// the test that catches the canonicalisation gotcha (CB5-15 WI-04 Dev Notes):
+// matcher.go looks headers up via textproto.CanonicalMIMEHeaderKey, so the
+// marker must be written in exactly that form, must be forced on (overwritten,
+// never appended) even if the connection's own header already carried it
+// under some other value, and must never mutate the connection's own map —
+// the ordinary inbound path (handleFrame) has to keep seeing exactly what the
+// handshake carried.
+func TestEmissionHeaderCarriesTheCanonicalMarkerAndDoesNotMutateTheConnection(t *testing.T) {
+	const canonicalKey = "X-Lyrebird-Stream-Direction"
+	if got := textproto.CanonicalMIMEHeaderKey("x-lyrebird-stream-direction"); got != canonicalKey {
+		t.Fatalf("test setup: textproto.CanonicalMIMEHeaderKey(%q) = %q, want %q",
+			"x-lyrebird-stream-direction", got, canonicalKey)
+	}
+
+	original := map[string][]string{
+		"space": {"default"},
+		// Simulates the connection's own header already carrying the
+		// canonical key under a forged value — the copy must WIN with EMIT,
+		// never carry both.
+		canonicalKey: {"forged"},
+	}
+
+	got := emissionHeader(original)
+
+	if vs := got[canonicalKey]; len(vs) != 1 || vs[0] != "EMIT" {
+		t.Fatalf("emissionHeader()[%q] = %v, want exactly [\"EMIT\"] (overwritten, not appended)", canonicalKey, vs)
+	}
+	if vs := original[canonicalKey]; len(vs) != 1 || vs[0] != "forged" {
+		t.Errorf("emissionHeader mutated the connection's own header map, want it left exactly as the handshake set it: %v", original)
+	}
+	if vs := got["space"]; len(vs) != 1 || vs[0] != "default" {
+		t.Errorf("emissionHeader dropped an unrelated handshake key %q: got %v", "space", got)
 	}
 }

@@ -18,8 +18,15 @@ import (
 
 // recordingHandler is a Handler whose recorder swallows everything, so a
 // connection test exercises the writer without needing a store.
+//
+// match is a permanently-unmatched stub rather than nil: CB5-15 WI-04 made
+// conn.emit always consult it (handleEmission), so every conn-level test that
+// calls emit() needs one wired, exactly as production always has one — a nil
+// match would only ever be reached through handleEmission's own recovered
+// panic, which is not what any of these tests are about.
 func testHandler() *Handler {
 	return &Handler{
+		match:  stubMatcher{matched: false},
 		record: nopRecorder{},
 		clock:  systemClock{},
 		log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -81,7 +88,11 @@ func TestConnEmitIsRecordedBeforeItReturns(t *testing.T) {
 	server, client := net.Pipe()
 	rec := &spyRecorder{}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := &Handler{record: rec, clock: systemClock{}, log: log}
+	// match is a permanently-unmatched stub (CB5-15 WI-04): emit() now
+	// consults it before falling through to the pass-through this test
+	// exercises, so it needs one wired the same way every other conn test
+	// does — see testHandler's own comment.
+	h := &Handler{match: stubMatcher{matched: false}, record: rec, clock: systemClock{}, log: log}
 	endpoint := domain.Endpoint{Name: "widget", Partition: "default", Framing: delimiterFraming()}
 	c := newConn(server, "default", endpoint, handshake{}, h, NewRegistry(), log)
 	t.Cleanup(func() {
@@ -112,6 +123,108 @@ func TestConnEmitIsRecordedBeforeItReturns(t *testing.T) {
 	if got := rec.count(); got != 1 {
 		t.Fatalf("recorder saw %d call(s) immediately after emit() returned, want 1 — "+
 			"the traffic record was not yet written when the caller regained control", got)
+	}
+}
+
+// interceptingMatcher matches every candidate with a fixed respond mock —
+// the minimum needed to prove emit()'s interception at the conn level
+// without duplicating handler_test.go's own handleEmission coverage.
+type interceptingMatcher struct {
+	mock domain.Mock
+}
+
+func (m interceptingMatcher) ExecuteProjected(
+	_ context.Context, _ string, base usecase.MatchInput, _ usecase.BodyProjector,
+) (domain.Mock, usecase.MatchInput, bool, error) {
+	return m.mock, base, true, nil
+}
+
+// TestConnEmitInterceptedByAnOptedInRuleNeverReachesThePeer is Test Plan item
+// 3(a): with a rule opted in, emit() still returns nil, but the peer sees
+// nothing at all — the answer was delivered inline, not queued for the wire.
+func TestConnEmitInterceptedByAnOptedInRuleNeverReachesThePeer(t *testing.T) {
+	server, client := net.Pipe()
+	rec := &capturingRecorder{}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h := &Handler{
+		match: interceptingMatcher{mock: domain.Mock{
+			ID: "intercept", Partition: "default",
+			Action: domain.Action{Kind: domain.ActionRespond, Respond: &domain.RespondAction{Body: []byte(`[{"text":"ANSWERED"}]`)}},
+		}},
+		record: rec, clock: systemClock{}, log: log,
+	}
+	endpoint := domain.Endpoint{Name: "widget", Partition: "default", Framing: delimiterFraming()}
+	c := newConn(server, "default", endpoint, handshake{}, h, NewRegistry(), log)
+	t.Cleanup(func() {
+		c.close()
+		_ = client.Close()
+	})
+
+	c.wg.Add(1)
+	go c.writeLoop()
+
+	if err := c.emit(context.Background(), []byte(`[{"text":"PUSHED"}]`)); err != nil {
+		t.Fatalf("emit(): %v", err)
+	}
+
+	if err := client.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	buf := make([]byte, 64)
+	if n, err := client.Read(buf); err == nil {
+		t.Fatalf("peer received %q, want nothing — the emission was intercepted", buf[:n])
+	}
+
+	if got := rec.decisions(); len(got) != 2 || got[0] != domain.DecisionMocked || got[1] != domain.DecisionMocked {
+		t.Fatalf("decisions = %v, want [mocked mocked] (the EMIT then the synthetic IN)", got)
+	}
+}
+
+// TestConnEmitPassesThroughByteIdenticallyAndRecordsNotConfigured is Test
+// Plan item 3(b): with no rule opted in, the emitted frame still reaches the
+// peer byte-identically, and AC-2 means its record now reads not_configured
+// — it used to be unconditionally mocked even with zero rules installed.
+func TestConnEmitPassesThroughByteIdenticallyAndRecordsNotConfigured(t *testing.T) {
+	server, client := net.Pipe()
+	rec := &capturingRecorder{}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h := &Handler{match: stubMatcher{matched: false}, record: rec, clock: systemClock{}, log: log}
+	endpoint := domain.Endpoint{Name: "widget", Partition: "default", Framing: delimiterFraming()}
+	c := newConn(server, "default", endpoint, handshake{}, h, NewRegistry(), log)
+	t.Cleanup(func() {
+		c.close()
+		_ = client.Close()
+	})
+
+	c.wg.Add(1)
+	go c.writeLoop()
+
+	read := make(chan string, 1)
+	go func() {
+		r := bufio.NewReader(client)
+		line, err := r.ReadString('\n')
+		if err != nil {
+			read <- ""
+			return
+		}
+		read <- strings.TrimRight(line, "\r\n")
+	}()
+
+	if err := c.emit(context.Background(), []byte(`[{"text":"PUSHED"}]`)); err != nil {
+		t.Fatalf("emit(): %v", err)
+	}
+
+	select {
+	case got := <-read:
+		if got != "PUSHED" {
+			t.Fatalf("peer received %q, want the emitted frame byte-identically", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("peer never received the pass-through emission")
+	}
+
+	if got := rec.decisions(); len(got) != 1 || got[0] != domain.DecisionNotConfigured {
+		t.Errorf("decisions = %v, want exactly [not_configured] (AC-2: was unconditionally mocked)", got)
 	}
 }
 

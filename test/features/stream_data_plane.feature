@@ -198,6 +198,40 @@ Feature: Generic byte-stream data plane
     Then the stand-in receives nothing
     And the traffic log has an entry for "/widget" with method "IN"
 
+  # CB5-15 WI-04: the app's own SPP write arrives at Lyrebird as an emission
+  # (the direction is inverted relative to every other endpoint), so a rule
+  # answering it must be explicitly opted in — see peripheral-control.md.
+  Scenario: A rule may answer an emitted frame instead of it reaching the stand-in
+    Given a stream endpoint "widget" delimited by CRLF
+    And a stream mock "widget-emit-answer" for "/widget" answering emissions responding with:
+      """
+      [{"text":"ANSWERED"}]
+      """
+    When a stand-in connects to endpoint "widget"
+    And I inject the frame "[{\"text\":\"PUSHED\"}]" into endpoint "widget"
+    Then the stand-in receives nothing
+    And the traffic log has an entry for "/widget" with decision "mocked"
+    When I delete the mock "widget-emit-answer"
+    And I inject the frame "[{\"text\":\"PUSHED\"}]" into endpoint "widget"
+    Then the stand-in receives the frame "PUSHED"
+
+  # CB5-11-shaped guard: an emission-opt-in rule existing alongside an
+  # ordinary respond mock must never change how an ordinary inbound frame
+  # resolves for a stand-in that never opted into it.
+  Scenario: An emission rule does not disturb the frames a stand-in still sends
+    Given a stream endpoint "widget" delimited by CRLF
+    And a stream mock "widget-read" for "/widget" responding with:
+      """
+      [{"text":"OK"}]
+      """
+    When a stand-in connects to endpoint "widget"
+    And a stream mock "widget-emit-answer" for "/widget" answering emissions responding with:
+      """
+      [{"text":"ANSWERED"}]
+      """
+    And the stand-in sends the frame "READ"
+    Then the stand-in receives the frame "OK"
+
   # ---------------------------------------------------------------- US3 (P3)
 
   Scenario: A delay fault answers late — the line is slow, not broken
