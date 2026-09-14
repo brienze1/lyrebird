@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"net/textproto"
 	"testing"
 	"time"
 
@@ -389,6 +390,83 @@ func TestCadenceActionMocksAreInvisibleToOrdinaryFrameMatching(t *testing.T) {
 	// actually calls for every inbound frame.
 	got, _, matched, err = uc.ExecuteProjected(context.Background(), "default",
 		MatchInput{Method: domain.StreamMethod, Path: "/gps"}, nil)
+	if err != nil {
+		t.Fatalf("ExecuteProjected(): %v", err)
+	}
+	if !matched || got.ID != "handshake" {
+		t.Fatalf("ExecuteProjected() = (%+v, %v), want \"handshake\" to win", got, matched)
+	}
+}
+
+// headerEqualsEval evaluates only a Match's header conditions, using the
+// same canonicalised lookup matcher.Engine performs in production
+// (textproto.CanonicalMIMEHeaderKey) — the minimum real semantics needed to
+// prove an emission-opt-in rule's header condition genuinely excludes it,
+// rather than a fake that always agrees the way alwaysMatchEval does.
+type headerEqualsEval struct{}
+
+func (headerEqualsEval) Matches(m domain.Match, in MatchInput) (bool, []ConditionResult) {
+	for name, matcher := range m.Headers {
+		vs, ok := in.Header[textproto.CanonicalMIMEHeaderKey(name)]
+		if !ok || len(vs) == 0 {
+			return false, nil
+		}
+		if matcher.Equals != nil && vs[0] != *matcher.Equals {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+func (headerEqualsEval) ValidateMatch(_ domain.Match) error { return nil }
+
+// TestEmissionOptInHeaderDoesNotWinOrdinaryFrameResolution is CB5-15 WI-04's
+// sibling of TestCadenceActionMocksAreInvisibleToOrdinaryFrameMatching: an
+// emission-opt-in rule (an ordinary respond rule distinguished only by the
+// synthesized X-Lyrebird-Stream-Direction header condition) must not win
+// resolution for an INBOUND frame, whose MatchInput.Header is the
+// connection's own unmodified handshake header and therefore never carries
+// the marker. The CB5-11 lesson this guards against: a rule that exists must
+// never change how an ordinary frame resolves for a consumer who never opted
+// into it.
+func TestEmissionOptInHeaderDoesNotWinOrdinaryFrameResolution(t *testing.T) {
+	repo := newFakeMockRepo()
+	emissionRule := domain.Mock{
+		ID: "emission-rule", Partition: "default", Priority: 100, CreatedAt: time.Unix(2, 0),
+		Match: domain.Match{
+			Method:  domain.StreamMethod,
+			Path:    "/cb5/spp",
+			Headers: map[string]domain.Matcher{"x-lyrebird-stream-direction": {Equals: ptrString("EMIT")}},
+		},
+		Action: domain.Action{Kind: domain.ActionRespond, Respond: &domain.RespondAction{Body: []byte("EMISSION-ANSWER")}},
+	}
+	handshakeReply := domain.Mock{
+		ID: "handshake", Partition: "default", Priority: 0, CreatedAt: time.Unix(1, 0),
+		Match:  domain.Match{Method: domain.StreamMethod, Path: "/cb5/spp"},
+		Action: domain.Action{Kind: domain.ActionRespond, Respond: &domain.RespondAction{Body: []byte("PONG")}},
+	}
+	if err := repo.CreateMock(context.Background(), emissionRule); err != nil {
+		t.Fatalf("CreateMock(emissionRule): %v", err)
+	}
+	if err := repo.CreateMock(context.Background(), handshakeReply); err != nil {
+		t.Fatalf("CreateMock(handshakeReply): %v", err)
+	}
+
+	uc := NewMatchRequest(repo, &fakeSeededSource{}, headerEqualsEval{}, scriptedEval{}, &fakeScenarioStateRepo{})
+
+	// An ordinary inbound frame: no synthesized emission marker, exactly
+	// what handleFrame builds from c.header.
+	in := MatchInput{Method: domain.StreamMethod, Path: "/cb5/spp", Header: map[string][]string{"Space": {"default"}}}
+
+	got, matched, err := uc.Execute(context.Background(), "default", in)
+	if err != nil {
+		t.Fatalf("Execute(): %v", err)
+	}
+	if !matched || got.ID != "handshake" {
+		t.Fatalf("Execute() = (%+v, %v), want the ordinary respond mock \"handshake\" to win "+
+			"(the higher-priority emission-opt-in rule must be invisible to an inbound frame lacking the marker)", got, matched)
+	}
+
+	got, _, matched, err = uc.ExecuteProjected(context.Background(), "default", in, nil)
 	if err != nil {
 		t.Fatalf("ExecuteProjected(): %v", err)
 	}

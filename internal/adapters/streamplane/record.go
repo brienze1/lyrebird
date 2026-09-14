@@ -41,6 +41,19 @@ func (h *Handler) recordInbound(
 	})
 }
 
+// recordSynthetic writes the IN record for a frame Lyrebird itself produced
+// in answer to an emission (CB5-15 WI-04) — bytes that never arrived from the
+// peer, but which the consumer reads exactly as if they had. Delegates to
+// recordInbound, whose shape (method IN, RequestHeaders the connection's own
+// UNMODIFIED handshake header — the emission marker is a matching device, not
+// something to publish into the traffic log — capped body, decision, matched
+// mock id) is exactly what a synthetic answer needs recorded too.
+func (h *Handler) recordSynthetic(
+	ctx context.Context, c *conn, frame []byte, decision domain.Decision, mockID *string,
+) {
+	h.recordInbound(ctx, c, frame, decision, mockID)
+}
+
 // recordOutbound writes the record for a frame that left. It runs inside the
 // connection's writer goroutine, so the traffic log's order is the wire's
 // order rather than the order handlers happened to finish in.

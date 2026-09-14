@@ -219,6 +219,40 @@ func (g *streamState) streamMockOverridingCadence(name, path string, body *godog
 	return nil
 }
 
+// streamMockAnsweringEmissions creates a mock whose match carries the
+// emission opt-in header condition (CB5-15 WI-04): it answers a frame the
+// app itself pushed onto the connection (an emission), never an ordinary
+// inbound frame — the header condition is the discriminator, since
+// domain.StreamMethod is a constant no rule can otherwise match direction on.
+func (g *streamState) streamMockAnsweringEmissions(name, path string, body *godog.DocString) error {
+	matchBlock := map[string]any{
+		"method":  "FRAME",
+		"path":    path,
+		"headers": map[string]any{"x-lyrebird-stream-direction": map[string]any{"equals": "EMIT"}},
+	}
+	payload := map[string]any{
+		"name":   name,
+		"match":  matchBlock,
+		"action": map[string]any{"respond": map[string]any{"body": body.Content}},
+	}
+	g.lastMock = payload
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	resp, err := g.post("/__lyrebird/mocks", "default", raw)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("create emission-answering mock %q status = %d: %s", name, resp.StatusCode, b)
+	}
+	return nil
+}
+
 // deleteMockNamed looks the mock up by name (an ephemeral mock's server-
 // assigned id is never surfaced to a scenario) via GET /__lyrebird/mocks,
 // then DELETEs it — the revert path WI-02's Story names alongside
@@ -857,6 +891,7 @@ func RegisterStreamSteps(sc *godog.ScenarioContext, s *appState) {
 	sc.Step(`^a stream mock "([^"]*)" for "([^"]*)" faulting with "([^"]*)"$`, g.streamMockFaulting)
 	sc.Step(`^a stream mock "([^"]*)" for "([^"]*)" faulting with "([^"]*)" of "([^"]*)" ms$`, g.streamMockFaultingWithDelay)
 	sc.Step(`^a stream mock "([^"]*)" for "([^"]*)" overriding the cadence with:$`, g.streamMockOverridingCadence)
+	sc.Step(`^a stream mock "([^"]*)" for "([^"]*)" answering emissions responding with:$`, g.streamMockAnsweringEmissions)
 	sc.Step(`^the stream mock "([^"]*)" projects "([^"]*)" at offset (\d+) length (\d+) as "([^"]*)"$`, g.projectsAt)
 	sc.Step(`^creating a stream mock for "([^"]*)" with a proxy action is rejected$`, g.proxyMockIsRejected)
 	sc.Step(`^I delete the mock "([^"]*)"$`, g.deleteMockNamed)

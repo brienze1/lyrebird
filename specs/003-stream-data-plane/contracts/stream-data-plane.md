@@ -82,6 +82,49 @@ Both go through the connection's single writer goroutine, so an emission never i
 answer or with another emission, and the emitted order is the delivered order (FR-033). Both are
 recorded with `method: EMIT` (FR-013).
 
+## Answering an emission
+
+By default an emission (cadence tick or injection) reaches the peer untouched — there is nothing
+for an ordinary rule to answer, because the only frame a rule ever sees pass through the ordinary
+match→respond model is an **inbound** one. A rule may opt in to answering an emission instead,
+narrowly, on the one leg where a connection's roles are inverted relative to every other endpoint
+(the peer, not Lyrebird, holds the "requester" role — e.g. the app's own SPP write to the device):
+
+```json
+{
+  "name": "spp-injected-error",
+  "match": {
+    "method": "FRAME",
+    "path": "/cb5/spp",
+    "headers": { "x-lyrebird-stream-direction": { "equals": "EMIT" } }
+  },
+  "action": {
+    "respond": { "body": "[{\"text\":\"&5E001111g,...\"}]" }
+  }
+}
+```
+
+- **Opt-in header, not a new match field.** `MatchInput.Method` is the constant `FRAME` for every
+  stream frame (no direction vocabulary to match on), so the emission path — and only the emission
+  path — synthesizes one extra header, `X-Lyrebird-Stream-Direction: EMIT`, onto a COPY of the
+  connection's own handshake header before matching. A stand-in cannot forge it through its own
+  handshake options: the copy always sets it, overwriting anything already there, and the
+  connection's own header (what an ordinary inbound frame matches against) is never mutated.
+- **Respond only.** `fault`, `proxy` and `cadence` actions cannot answer an emission; a rule
+  carrying one of those is simply not served here (an ordinary emission still reaches the peer, as
+  if no rule had opted in).
+- **Recording.** A hit writes two records: the emission itself, `method: EMIT`, `decision: mocked`,
+  `matched_mock_id` set to the answering rule — and the answer, `method: IN`, `decision: mocked`,
+  the same `matched_mock_id`, exactly as if it had arrived from the peer. Neither reaches the wire's
+  own writer goroutine; both are written inline, since there is no wire order left to preserve once
+  the emission itself never reaches the socket.
+- **Pass-through is now honestly labelled.** With no opted-in rule, an emission still reaches the
+  peer byte-identically, but its `method: EMIT` record now reads `decision: not_configured` rather
+  than the unconditional `mocked` every earlier revision recorded — that was a labelling bug, not a
+  CB5-facing behaviour: it made a plain injection with zero rules installed look answered by one.
+  A cadence tick's own `EMIT`/`mocked`/null-`matched_mock_id` record is unaffected — see "Runtime
+  cadence override" below.
+
 ## Runtime cadence override
 
 An ordinary mock may carry a third action kind, `cadence`, that overrides — at runtime and

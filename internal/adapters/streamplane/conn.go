@@ -257,7 +257,8 @@ func (c *conn) disconnectedErr() error {
 	return fmt.Errorf("%w: the stand-in on endpoint %q has disconnected", domain.ErrNotFound, c.endpoint.Name)
 }
 
-// emit builds an unprompted frame from a frame spec and queues it through
+// emit builds an unprompted frame from a frame spec and, unless an opted-in
+// rule answers it first (handleEmission, CB5-15 WI-04), queues it through
 // queueAndWait — the control-plane injection path (FR-012), which is the one
 // caller that needs the frame confirmed written and recorded, not merely
 // accepted, before it hands control back (see queueAndWait).
@@ -272,10 +273,20 @@ func (c *conn) emit(ctx context.Context, frameSpecJSON []byte) error {
 	if err != nil {
 		return err
 	}
+	if c.handler.handleEmission(ctx, c, bytes) {
+		// A rule answered inline: nothing reaches the peer, and both the
+		// EMIT record and its synthetic IN answer are already written.
+		return nil
+	}
 	return c.queueAndWait(ctx, outbound{
 		bytes:     bytes,
 		direction: domain.StreamDirectionEmit,
-		decision:  domain.DecisionMocked,
+		// AC-2 (CB5-15 WI-04): this used to be unconditionally
+		// DecisionMocked, which made every plain injection lie about being
+		// answered by a rule even with zero rules installed. A plain
+		// injection with no opted-in rule passes straight through, so it is
+		// not_configured — the same label an unmatched inbound frame gets.
+		decision: domain.DecisionNotConfigured,
 	})
 }
 

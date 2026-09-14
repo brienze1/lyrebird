@@ -10,6 +10,32 @@ import (
 	"github.com/brienze1/lyrebird/internal/usecase"
 )
 
+// emissionDirectionHeader is the MatchInput.Header key an emission's own
+// match input synthesizes onto a COPY of the connection's handshake header
+// (emissionHeader, below), so a rule can opt in to answering an emission
+// instead of it reaching the peer untouched (CB5-15 WI-04). Written in
+// textproto's canonical form because that is the form matcher.go's header
+// lookup canonicalizes every condition name to — handshake.go stores
+// handshake keys lowercased, which is pre-existing behaviour shared with the
+// gRPC plane and deliberately left alone here; a marker written any other way
+// would silently never be found (matcher.go's own "no error, no log, just a
+// mock that quietly does nothing" warning).
+const emissionDirectionHeader = "X-Lyrebird-Stream-Direction"
+
+// emissionHeader returns a copy of the connection's handshake header with the
+// emission marker forced on, so a rule can opt in to answering emissions and
+// a stand-in cannot forge the marker through its own handshake options. h
+// itself is never mutated — the ordinary inbound path (handleFrame) must keep
+// seeing exactly what the handshake carried.
+func emissionHeader(h map[string][]string) map[string][]string {
+	out := make(map[string][]string, len(h)+1)
+	for k, v := range h {
+		out[k] = v
+	}
+	out[emissionDirectionHeader] = []string{"EMIT"}
+	return out
+}
+
 // mockMatcher is the subset of *usecase.MatchRequest this plane needs, named
 // at the point of use per Go convention (the same shape proxy.Handler and
 // grpcplane.handler depend on).
@@ -168,6 +194,90 @@ func (h *Handler) handleFrame(ctx context.Context, c *conn, frame []byte) {
 			"endpoint", c.endpoint.Name, "mock", mock.ID, "action", mock.Action.Kind)
 		h.recordInbound(ctx, c, frame, domain.DecisionInternalError, &mockID)
 	}
+}
+
+// handleEmission resolves an outbound emission (a frame conn.emit is about to
+// push, unprompted by any inbound frame) against the mock catalog and, on a
+// hit, answers it instead of letting it reach the peer. Reports whether it
+// did — conn.emit falls through to its own pass-through queueAndWait in
+// every case this returns false.
+//
+// This is CB5-15 WI-04's design: answering an emission is the SAME
+// match→respond model handleFrame already uses, discriminated only by a
+// header a rule must explicitly opt in to (emissionHeader) — which is why
+// this mirrors handleFrame almost line for line rather than inventing a
+// parallel mechanism.
+func (h *Handler) handleEmission(ctx context.Context, c *conn, frame []byte) (answered bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			// A panic must never lose the emission: it is recorded, and
+			// answered stays false so conn.emit still delivers it to the wire.
+			h.log.Error("streamplane: recovered panic handling emission", "endpoint", c.endpoint.Name, "panic", r)
+			h.recordSynthetic(ctx, c, frame, domain.DecisionInternalError, nil)
+			answered = false
+		}
+	}()
+
+	projector, err := newFrameProjector(payloadOf(frame, c.endpoint.Framing), c.endpoint.Projection)
+	if err != nil {
+		h.log.Warn("streamplane: could not project emission", "endpoint", c.endpoint.Name, "err", err)
+		return false
+	}
+
+	base := usecase.MatchInput{
+		Method: domain.StreamMethod,
+		Path:   "/" + c.endpoint.Name,
+		Host:   domain.StreamHost,
+		Header: emissionHeader(c.header),
+		Body:   projector.defaultEnvelope,
+	}
+
+	mock, in, matched, err := h.match.ExecuteProjected(ctx, c.partition, base, projector)
+	if err != nil {
+		// A broken script must not swallow the app's own frame: fall through
+		// to the wire exactly as if nothing had matched.
+		h.log.Warn("streamplane: matching an emission failed", "endpoint", c.endpoint.Name, "err", err)
+		return false
+	}
+	if !matched {
+		// Write nothing here: the pass-through EMIT record remains conn.emit's
+		// own job, exactly as it is today. This path only ever adds a record
+		// on a hit.
+		return false
+	}
+
+	if mock.Action.Kind != domain.ActionRespond {
+		// ActionFault, ActionProxy and ActionCadence cannot answer an
+		// emission — minimal scope (CB5-15 WI-04 Dev Notes, "Explicitly OUT
+		// of scope"). Left for the pass-through path, recorded here only.
+		h.log.Warn("streamplane: rule action cannot answer an emission",
+			"endpoint", c.endpoint.Name, "mock", mock.ID, "action", mock.Action.Kind)
+		return false
+	}
+
+	mockID := mock.ID
+	_, _, body, err := usecase.BuildRespondOutputWithScript(*mock.Action.Respond, mock.Script, in, h.tpl, h.script)
+	if err != nil {
+		h.log.Warn("streamplane: emission-answer respond script failed",
+			"endpoint", c.endpoint.Name, "mock", mock.ID, "err", err)
+		return false
+	}
+	built, err := h.buildAnswer(body, in.Body, c.endpoint.Framing, false)
+	if err != nil {
+		h.log.Warn("streamplane: could not build emission answer",
+			"endpoint", c.endpoint.Name, "mock", mock.ID, "err", err)
+		return false
+	}
+
+	// latencyOf(mock.Action.Respond.LatencyMS) is deliberately ignored on
+	// this path: an emission answer never reaches the writer, so there is no
+	// wire write left to delay.
+	h.recordOutbound(ctx, c, outbound{
+		bytes: frame, direction: domain.StreamDirectionEmit,
+		decision: domain.DecisionMocked, mockID: &mockID,
+	})
+	h.recordSynthetic(ctx, c, built, domain.DecisionMocked, &mockID)
+	return true
 }
 
 // serveRespond builds the answer and queues it.

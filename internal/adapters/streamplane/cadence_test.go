@@ -1,7 +1,10 @@
 package streamplane
 
 import (
+	"bufio"
 	"context"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -149,5 +152,50 @@ func TestConnResolveCadence_ActiveOverride(t *testing.T) {
 	eff := c.resolveCadence(context.Background(), declared)
 	if eff.identity != "mock:m1" {
 		t.Errorf("identity = %q, want %q", eff.identity, "mock:m1")
+	}
+}
+
+// TestCadenceTickRecordIsUnchangedByEmissionInterception is CB5-15 WI-04's
+// AC-2 regression guard: a cadence tick's own EMIT+mocked+nil-mock-id record
+// (cadence.go, CB5-54 caution — "overriding what a cadence emits changes the
+// content, never the traffic shape") must stay exactly as it is. Only
+// conn.emit's own plain-injection path changes decision (mocked ->
+// not_configured); nothing about a cadence tick's recording changes.
+func TestCadenceTickRecordIsUnchangedByEmissionInterception(t *testing.T) {
+	c, client := newTestConn(t)
+	rec := &capturingRecorder{}
+	c.handler = &Handler{record: rec, clock: systemClock{}, log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	cad := &domain.Cadence{
+		Interval:  0,
+		Frames:    [][]domain.FramePart{{{Text: ptr("TICK")}}},
+		OnExhaust: domain.OnExhaustionRepeatLast,
+	}
+	cancel := startCadence(t, c, cad)
+	defer cancel()
+
+	if err := client.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	if _, err := bufio.NewReader(client).ReadString('\n'); err != nil {
+		t.Fatalf("reading the cadence tick: %v", err)
+	}
+
+	// The tick is written and recorded by the same writer goroutine, but
+	// recording happens just after the write the reader above unblocked on
+	// — poll briefly rather than assuming it has already landed.
+	deadline := time.Now().Add(2 * time.Second)
+	for len(rec.decisions()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	decisions := rec.decisions()
+	if len(decisions) == 0 || decisions[0] != domain.DecisionMocked {
+		t.Fatalf("cadence-tick decisions = %v, want the first to be mocked", decisions)
+	}
+	if id := rec.records[0].MatchedMockID; id != nil {
+		t.Errorf("cadence-tick MatchedMockID = %v, want nil", id)
+	}
+	if got := rec.records[0].Method; got != domain.StreamDirectionEmit {
+		t.Errorf("cadence-tick Method = %q, want %q", got, domain.StreamDirectionEmit)
 	}
 }
