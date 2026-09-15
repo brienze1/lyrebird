@@ -120,11 +120,14 @@ Feature: Generic byte-stream data plane
       """
       [{"text":"OVERRIDE"}]
       """
-    Then the stand-in receives the frame "OVERRIDE"
+    # "eventually": a tick emitted before the mock POST landed may still be in
+    # flight, so the very next frame is not guaranteed to be the override; the
+    # second, strict read is what proves the override is sustained.
+    Then the stand-in eventually receives the frame "OVERRIDE"
     And the stand-in receives the frame "OVERRIDE"
     And the traffic log has an entry for "/ticker" with decision "mocked"
     When I delete the mock "gps-override"
-    Then the stand-in receives the frame "SEED"
+    Then the stand-in eventually receives the frame "SEED"
 
   Scenario: A runtime cadence-override mock does not survive a space reset
     Given a seeded stream endpoint "seeded-ticker" delimited by CRLF emitting every "40ms":
@@ -138,7 +141,7 @@ Feature: Generic byte-stream data plane
       """
       [{"text":"OVERRIDE"}]
       """
-    Then the stand-in receives the frame "OVERRIDE"
+    Then the stand-in eventually receives the frame "OVERRIDE"
     When I reset the space "default"
     Then the stand-in observes the connection closing
     When a stand-in connects to endpoint "seeded-ticker"
