@@ -306,20 +306,21 @@ func TestCB5SeededPinLevelsAnswerRead(t *testing.T) {
 	app := startCB5App(t)
 	client := connectCB5(t, app, "cb5/gpio")
 
-	// Every pin the boot gate polls answers "1": presence sensors read
-	// directly (1 = connected), position sensors read INVERTED (1 = has not
-	// yet arrived) — contracts/dosing-cycle.md, "The three applicators".
-	// Seeding 0 on a position sensor would complete every dose instantly.
+	// Every pin the boot gate polls answers "0" on the field board: presence
+	// sensors read INVERTED (0 = connected), position sensors read directly
+	// (0 = has not yet arrived) — contracts/dosing-cycle.md, "The three
+	// applicators". Seeding 1 on a position sensor would complete every dose
+	// instantly.
 	cases := []struct {
 		pin  int
 		role string
 	}{
-		{14, "presence right"},
-		{25, "presence center"},
-		{35, "presence left"},
+		{19, "presence left"},
+		{18, "presence center"},
+		{13, "presence right"},
+		{35, "position left"},
+		{34, "position center"},
 		{27, "position right"},
-		{33, "position center"},
-		{34, "position left"},
 	}
 	for _, tc := range cases {
 		t.Run(fmt.Sprintf("pin_%d_%s", tc.pin, strings.ReplaceAll(tc.role, " ", "_")), func(t *testing.T) {
@@ -328,7 +329,7 @@ func TestCB5SeededPinLevelsAnswerRead(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read LEVEL reply for pin %d: %v", tc.pin, err)
 			}
-			want := fmt.Sprintf("LEVEL %d 1", tc.pin)
+			want := fmt.Sprintf("LEVEL %d 0", tc.pin)
 			if got != want {
 				t.Fatalf("pin %d (%s): reply = %q, want %q", tc.pin, tc.role, got, want)
 			}
@@ -415,9 +416,13 @@ func TestCB5SeedSurvivesReset(t *testing.T) {
 	app := startCB5App(t)
 
 	seededNames := []string{
-		"cb5-seed-pin-14", "cb5-seed-pin-25", "cb5-seed-pin-35",
-		"cb5-seed-pin-27", "cb5-seed-pin-33", "cb5-seed-pin-34",
+		"cb5-seed-pin-19", "cb5-seed-pin-18", "cb5-seed-pin-13",
+		"cb5-seed-pin-35", "cb5-seed-pin-34", "cb5-seed-pin-27",
 	}
+	// The never-built board's seeds (CB5-74): 14 and 33 are no pin's role on
+	// the field board, and 25 is the RIGHT motor OUTPUT there, so it must
+	// never answer a READ.
+	retiredNames := []string{"cb5-seed-pin-14", "cb5-seed-pin-25", "cb5-seed-pin-33"}
 	scenarioMock := map[string]any{
 		"name": "scenario-authored",
 		"match": map[string]any{
@@ -448,6 +453,11 @@ func TestCB5SeedSurvivesReset(t *testing.T) {
 	for _, name := range seededNames {
 		if !byName[name] {
 			t.Errorf("seeded mock %q did not survive reset", name)
+		}
+	}
+	for _, name := range retiredNames {
+		if byName[name] {
+			t.Errorf("retired never-built-board seed %q is still loaded", name)
 		}
 	}
 	if byName["scenario-authored"] {
