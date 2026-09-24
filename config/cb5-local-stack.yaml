@@ -15,11 +15,12 @@
 #     test/integration/resources/.env.local @ 63d8139
 #   - the digital-I/O line protocol (SET/READ/LEVEL, space-separated fields):
 #     bhlabz/cb5-e2e test/integration/steps/pin_steps_test.go @ 63d8139
-#   - pin numbers: cb5-service/src/config/config.h,
-#     CONFIG_PORT_GPIO_SENSOR_CONNECTED_APPLICATOR_{RIGHT,CENTER,LEFT} and
-#     CONFIG_PORT_GPIO_SENSOR_APPLICATOR_{RIGHT,CENTER,LEFT}
-#   - inverted position-sensor reads: cb5-spec's
-#     contracts/dosing-cycle.md, "The three applicators"
+#   - pin numbers: cb5-service/src/config/config.h, the field board (firmware
+#     2.2.0's values, restored by CB5-74):
+#     CONFIG_PORT_GPIO_SENSOR_CONNECTED_APPLICATOR_{LEFT,CENTER,RIGHT} = 19/18/13
+#     and CONFIG_PORT_GPIO_SENSOR_APPLICATOR_{LEFT,CENTER,RIGHT} = 35/34/27
+#   - read polarity (presence sensors read inverted, position sensors read
+#     directly): cb5-spec's contracts/dosing-cycle.md, "The three applicators"
 #
 # Every rule below is priority 1, so any scenario-authored rule (cb5-e2e's
 # pin_steps_test.go writes at priority 100) outranks it without needing this
@@ -104,7 +105,11 @@ mocks:
   # The boot-gate defaults CB5::_scanConnectedApplicators() needs: every
   # applicator reports present, so `cb5local up` can report the firmware
   # ready before any scenario has run a single step.
-  - name: cb5-seed-pin-14
+  #
+  # Presence sensors read INVERTED on the field board
+  # (PoisonApplicator::isConnected() returns !readDigitalPort(...)), so level
+  # 0 means "connected": LEFT 19, CENTER 18, RIGHT 13.
+  - name: cb5-seed-pin-19
     priority: 1
     match:
       path: /cb5/gpio
@@ -112,12 +117,12 @@ mocks:
         - jsonpath: "$.fields.0"
           equals: "READ"
         - jsonpath: "$.fields.1"
-          equals: "14"
+          equals: "19"
     action:
       respond:
-        body: '[{"text":"LEVEL 14 1"}]'
+        body: '[{"text":"LEVEL 19 0"}]'
 
-  - name: cb5-seed-pin-25
+  - name: cb5-seed-pin-18
     priority: 1
     match:
       path: /cb5/gpio
@@ -125,11 +130,31 @@ mocks:
         - jsonpath: "$.fields.0"
           equals: "READ"
         - jsonpath: "$.fields.1"
-          equals: "25"
+          equals: "18"
     action:
       respond:
-        body: '[{"text":"LEVEL 25 1"}]'
+        body: '[{"text":"LEVEL 18 0"}]'
 
+  - name: cb5-seed-pin-13
+    priority: 1
+    match:
+      path: /cb5/gpio
+      body:
+        - jsonpath: "$.fields.0"
+          equals: "READ"
+        - jsonpath: "$.fields.1"
+          equals: "13"
+    action:
+      respond:
+        body: '[{"text":"LEVEL 13 0"}]'
+
+  # Position (dose) sensors read DIRECTLY on the field board
+  # (PoisonApplicator::readSensor() returns readDigitalPort(...)), so level 0
+  # means "has not arrived yet": LEFT 35, CENTER 34, RIGHT 27. Seeding 1 would
+  # complete every dose instantly and fail 002/E. DOSE RAPIDA before any
+  # scenario runs (contracts/dosing-cycle.md). Both groups answer 0 for
+  # opposite reasons: the presence read is inverted, the position read is
+  # direct. Do not merge the two comments; the asymmetry is the contract.
   - name: cb5-seed-pin-35
     priority: 1
     match:
@@ -141,38 +166,7 @@ mocks:
           equals: "35"
     action:
       respond:
-        body: '[{"text":"LEVEL 35 1"}]'
-
-  # Position sensors read INVERTED (PoisonApplicator::readSensor() returns
-  # !readDigitalPort(...)), so level 1 means "has not arrived yet" — seeding
-  # 0 would complete every dose instantly and fail 002/E. DOSE RAPIDA before
-  # any scenario runs (contracts/dosing-cycle.md). Do not normalise this to
-  # match the presence rules above; the asymmetry is the contract.
-  - name: cb5-seed-pin-27
-    priority: 1
-    match:
-      path: /cb5/gpio
-      body:
-        - jsonpath: "$.fields.0"
-          equals: "READ"
-        - jsonpath: "$.fields.1"
-          equals: "27"
-    action:
-      respond:
-        body: '[{"text":"LEVEL 27 1"}]'
-
-  - name: cb5-seed-pin-33
-    priority: 1
-    match:
-      path: /cb5/gpio
-      body:
-        - jsonpath: "$.fields.0"
-          equals: "READ"
-        - jsonpath: "$.fields.1"
-          equals: "33"
-    action:
-      respond:
-        body: '[{"text":"LEVEL 33 1"}]'
+        body: '[{"text":"LEVEL 35 0"}]'
 
   - name: cb5-seed-pin-34
     priority: 1
@@ -185,4 +179,17 @@ mocks:
           equals: "34"
     action:
       respond:
-        body: '[{"text":"LEVEL 34 1"}]'
+        body: '[{"text":"LEVEL 34 0"}]'
+
+  - name: cb5-seed-pin-27
+    priority: 1
+    match:
+      path: /cb5/gpio
+      body:
+        - jsonpath: "$.fields.0"
+          equals: "READ"
+        - jsonpath: "$.fields.1"
+          equals: "27"
+    action:
+      respond:
+        body: '[{"text":"LEVEL 27 0"}]'
