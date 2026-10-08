@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/brienze1/lyrebird/internal/adapters/jsonpath"
 	"github.com/brienze1/lyrebird/internal/domain"
@@ -24,6 +25,12 @@ func NewListTraffic(repo TrafficRepo) *ListTraffic { return &ListTraffic{repo: r
 func (uc *ListTraffic) Execute(ctx context.Context, partition string, filter TrafficFilter) ([]domain.TrafficRecord, error) {
 	if filter.Limit < 0 {
 		return nil, fmt.Errorf("%w: limit must not be negative", domain.ErrInvalidTrafficFilter)
+	}
+	// A mock id never carries whitespace; one that does is a copy-paste slip
+	// (a trailing newline) that would otherwise silently report no traffic.
+	if id := filter.MatchedMockID; strings.TrimSpace(id) != id {
+		return nil, fmt.Errorf("%w: matched_mock_id %q must not be blank or carry surrounding whitespace",
+			domain.ErrInvalidTrafficFilter, id)
 	}
 	if (filter.RequestBodyPath == "") != (filter.RequestBodyEquals == "") {
 		return nil, fmt.Errorf("%w: request body path and value must be given together",
@@ -56,7 +63,9 @@ func (uc *ListTraffic) Execute(ctx context.Context, partition string, filter Tra
 }
 
 // keepMatchingRequestBody drops entries whose request body does not carry want
-// at path, including any it cannot decode.
+// at path, including any it cannot decode. A request recorded with a declared
+// form body is addressed by field name (key -> first value), as mock body
+// conditions are.
 func keepMatchingRequestBody(records []domain.TrafficRecord, path, want string) []domain.TrafficRecord {
 	kept := make([]domain.TrafficRecord, 0, len(records))
 	for _, record := range records {
@@ -64,7 +73,7 @@ func keepMatchingRequestBody(records []domain.TrafficRecord, path, want string) 
 		if err != nil {
 			continue
 		}
-		if jsonpath.GetBytes(message.Body, path).String() == want {
+		if jsonpath.GetBytes(jsonpath.Document(message.Headers, message.Body), path).String() == want {
 			kept = append(kept, record)
 		}
 	}

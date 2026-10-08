@@ -17,7 +17,7 @@ import (
 
 // ListTrafficIn is list_traffic's input. Field-for-field parity with
 // httpadmin's parseTrafficFilter (method/host/path_prefix/status/since/
-// until/limit plus the request-body pair) is deliberate — REST must not
+// until/limit/matched_mock_id plus the request-body pair) is deliberate — REST must not
 // expose a filter MCP lacks (constitution Principle II).
 type ListTrafficIn struct {
 	Space  string `json:"space,omitempty" jsonschema:"space/partition to list; defaults to the server's default space"`
@@ -28,6 +28,8 @@ type ListTrafficIn struct {
 	Since  string `json:"since,omitempty" jsonschema:"RFC3339 timestamp; only traffic at or after this time"`
 	Until  string `json:"until,omitempty" jsonschema:"RFC3339 timestamp; only traffic at or before this time"`
 	Limit  int    `json:"limit,omitempty" jsonschema:"maximum number of records to return"`
+	// MatchedMockID keeps only traffic answered by this mock.
+	MatchedMockID string `json:"matched_mock_id,omitempty" jsonschema:"filter to traffic answered by this mock id (the id create_mock returned)"`
 	// Given together: keeps only traffic whose request body carries this value
 	// at this path.
 	RequestBodyPath   string `json:"request_body_path,omitempty" jsonschema:"gjson path into the recorded request body; must be given with request_body_equals"`
@@ -95,8 +97,10 @@ type PromoteTrafficIn struct {
 func registerTrafficTools(s *sdkmcp.Server, deps Deps) {
 	sdkmcp.AddTool(s, &sdkmcp.Tool{
 		Name: "list_traffic",
-		Description: `List recorded traffic, filterable by host/path/status/since/limit, and by a value in ` +
-			`the recorded request body. Example: {"limit":20} or ` +
+		Description: `List recorded traffic, filterable by host/path/status/since/limit, by the mock that ` +
+			`answered it (matched_mock_id), and by a value in the recorded request body (a JSON path, or a ` +
+			`field name when the body was posted as application/x-www-form-urlencoded). Example: {"limit":20}, ` +
+			`{"matched_mock_id":"<mock-id>"} or ` +
 			`{"path":"/pay","request_body_path":"order.id","request_body_equals":"42"}`,
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in ListTrafficIn) (*sdkmcp.CallToolResult, ListTrafficOut, error) {
 		partition := resolveSpace(in.Space, deps.DefaultSpace)
@@ -223,6 +227,7 @@ func registerTrafficTools(s *sdkmcp.Server, deps Deps) {
 func trafficFilterFromIn(in ListTrafficIn) (usecase.TrafficFilter, error) {
 	filter := usecase.TrafficFilter{
 		Method: in.Method, Host: in.Host, PathPrefix: in.Path, Status: in.Status, Limit: in.Limit,
+		MatchedMockID:   in.MatchedMockID,
 		RequestBodyPath: in.RequestBodyPath, RequestBodyEquals: in.RequestBodyEquals,
 	}
 	if in.Since != "" {

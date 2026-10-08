@@ -22,7 +22,8 @@ type getTrafficUseCase interface {
 }
 
 // ListTraffic handles GET /__lyrebird/traffic (contracts/admin-rest.md).
-// Query params: method, host, path_prefix, status, since, until (RFC3339), limit.
+// Query params: method, host, path_prefix, status, since, until (RFC3339), limit,
+// matched_mock_id, and the request_body_path/request_body_equals pair.
 func ListTraffic(uc listTrafficUseCase) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		partition := httpmw.PartitionFromContext(r.Context())
@@ -83,6 +84,7 @@ func parseTrafficFilter(r *http.Request) (usecase.TrafficFilter, error) {
 	filter.Method = q.Get("method")
 	filter.Host = q.Get("host")
 	filter.PathPrefix = q.Get("path_prefix")
+	filter.MatchedMockID = q.Get("matched_mock_id")
 	filter.RequestBodyPath = q.Get("request_body_path")
 	filter.RequestBodyEquals = q.Get("request_body_equals")
 

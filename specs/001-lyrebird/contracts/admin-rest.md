@@ -36,13 +36,23 @@ the token endpoint and health require `Authorization: Bearer` (FR-031).
 | `GET /__lyrebird/healthz` `GET /__lyrebird/readyz` | — | liveness/readiness (never authed) | FR-034 |
 
 `GET /__lyrebird/traffic/{id}` (and its `get_traffic` twin) return each recorded
-message as `{ headers, body, json?, body_truncated, body_total_size }`. `body` is
+message as `{ headers, body, json?, form?, body_truncated, body_total_size }`. `body` is
 the bytes, base64-encoded. `json` is those same bytes already parsed, present
 only when the body is valid JSON — so a consumer verifying what a service
 actually sent upstream can address `request.json.<path>` directly instead of
 base64-decoding first. It carries the sender's bytes verbatim rather than a
 re-marshalled value, so numeric literals are preserved exactly (`0.011` stays
 `0.011`); truncated bodies are not valid JSON and are therefore omitted rather
-than half-parsed.
+than half-parsed. `form` is the same idea for a body declared
+`application/x-www-form-urlencoded` (and not valid JSON): an object of field →
+first value, addressable as `request.form.<field>`; omitted for every other body,
+for one that does not decode, and for a truncated one
+(specs/004-form-body-matching).
+
+`GET /__lyrebird/traffic` filters: `method`, `host`, `path_prefix`, `status`,
+`since`, `until` (RFC3339), `limit`, `matched_mock_id` (only traffic answered by
+that mock; a value with surrounding whitespace is a 400), and the
+`request_body_path`+`request_body_equals` pair (given together; the path reads a
+form post by field name, as body matchers do).
 
 Ports: data-plane proxy listener(s) separate from the control-plane listener (MCP HTTP + this REST).

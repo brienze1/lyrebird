@@ -77,6 +77,7 @@ func TestListTrafficParsesEveryFilterField(t *testing.T) {
 	result := callTool(t, srv, "list_traffic", map[string]any{
 		"space": "team-a", "method": "POST", "host": "api.local", "path": "/v1",
 		"status": 404, "since": "2024-01-01T00:00:00Z", "until": "2024-06-01T00:00:00Z", "limit": 10,
+		"matched_mock_id": "mock-1",
 	})
 	if result.IsError {
 		t.Fatalf("list_traffic returned an error: %s", errTextIfError(result))
@@ -96,6 +97,9 @@ func TestListTrafficParsesEveryFilterField(t *testing.T) {
 	}
 	if f.Until == nil || !f.Until.Equal(time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)) {
 		t.Errorf("Until = %v, want 2024-06-01T00:00:00Z", f.Until)
+	}
+	if f.MatchedMockID != "mock-1" {
+		t.Errorf("MatchedMockID = %q, want mock-1", f.MatchedMockID)
 	}
 }
 
@@ -437,5 +441,21 @@ func TestPromoteTrafficMapsUseCaseErrorViaExplainWithKindTag(t *testing.T) {
 	msg := errText(t, result)
 	if !strings.HasPrefix(msg, "not_found: ") {
 		t.Errorf("error = %q, want it prefixed with the not_found kind tag", msg)
+	}
+}
+
+func TestListTrafficRejectsBlankMatchedMockIDEndToEnd(t *testing.T) {
+	srv := New(Deps{
+		DefaultSpace:   "default",
+		ListTraffic:    usecase.NewListTraffic(noopTrafficRepo{}),
+		GetTraffic:     &stubGetTraffic{},
+		ClearTraffic:   &stubClearTraffic{},
+		Metrics:        &stubMetrics{},
+		PromoteTraffic: &stubPromoteTraffic{},
+	})
+
+	msg := errText(t, callTool(t, srv, "list_traffic", map[string]any{"matched_mock_id": "mock-1\n"}))
+	if !strings.HasPrefix(msg, "validation: ") || !strings.Contains(msg, "matched_mock_id") {
+		t.Errorf("error = %q, want a validation error naming matched_mock_id", msg)
 	}
 }

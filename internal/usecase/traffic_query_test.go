@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/brienze1/lyrebird/internal/domain"
@@ -140,5 +141,52 @@ func TestListTrafficAppliesLimitAfterTheBodyFilter(t *testing.T) {
 	if repo.listFilter.Limit != 0 {
 		t.Fatalf("the store was asked for %d rows; a body filter has to scan unbounded and cap afterwards",
 			repo.listFilter.Limit)
+	}
+}
+
+func TestListTrafficBodyFilterAddressesFormBodies(t *testing.T) {
+	form := map[string][]string{"Content-Type": {"application/x-www-form-urlencoded"}}
+	encode := func(headers map[string][]string, body string) []byte {
+		t.Helper()
+		b, err := EncodeRecordedMessage(RecordedMessage{Headers: headers, Body: []byte(body)})
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		return b
+	}
+	repo := &fakeTrafficRepo{listResult: []domain.TrafficRecord{
+		{ID: "mine", Request: encode(form, "channel=C1&text=hello+world")},
+		{ID: "theirs", Request: encode(form, "channel=C2&text=hello+world")},
+		{ID: "plain", Request: encode(map[string][]string{"Content-Type": {"text/plain"}}, "channel=C1")},
+		{ID: "json", Request: encode(nil, `{"channel":"C1"}`)},
+	}}
+
+	got, err := NewListTraffic(repo).Execute(context.Background(), "default", TrafficFilter{
+		RequestBodyPath: "channel", RequestBodyEquals: "C1",
+	})
+	if err != nil {
+		t.Fatalf("Execute(): %v", err)
+	}
+	if want := []string{"mine", "json"}; fmt.Sprint(ids(got)) != fmt.Sprint(want) {
+		t.Fatalf("got %v, want %v (form by field, JSON unchanged, undeclared text not guessed)", ids(got), want)
+	}
+}
+
+func TestListTrafficPassesMatchedMockIDToTheStore(t *testing.T) {
+	repo := &fakeTrafficRepo{}
+	if _, err := NewListTraffic(repo).Execute(context.Background(), "default", TrafficFilter{MatchedMockID: "mock-1"}); err != nil {
+		t.Fatalf("Execute(): %v", err)
+	}
+	if repo.listFilter.MatchedMockID != "mock-1" {
+		t.Fatalf("store filter MatchedMockID = %q, want mock-1", repo.listFilter.MatchedMockID)
+	}
+}
+
+func TestListTrafficRejectsWhitespaceInMatchedMockID(t *testing.T) {
+	for _, id := range []string{" ", "mock-1\n", " mock-1"} {
+		_, err := NewListTraffic(&fakeTrafficRepo{}).Execute(context.Background(), "default", TrafficFilter{MatchedMockID: id})
+		if !errors.Is(err, domain.ErrInvalidTrafficFilter) {
+			t.Errorf("MatchedMockID %q: err = %v, want ErrInvalidTrafficFilter", id, err)
+		}
 	}
 }

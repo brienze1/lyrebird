@@ -20,6 +20,9 @@ type TrafficFilter struct {
 	Status     *int
 	Since      *time.Time
 	Until      *time.Time
+	// MatchedMockID keeps only entries answered by this mock (empty = no
+	// filter). A plaintext column, so it is applied in SQL.
+	MatchedMockID string
 	// RequestBodyPath and RequestBodyEquals keep only entries whose recorded
 	// request body has that gjson path equal to that value. Applied after decode
 	// rather than in SQL, since the body is sealed in the opaque blob.

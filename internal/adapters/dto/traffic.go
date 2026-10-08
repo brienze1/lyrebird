@@ -3,6 +3,7 @@ package dto
 import (
 	"encoding/json"
 
+	"github.com/brienze1/lyrebird/internal/adapters/jsonpath"
 	"github.com/brienze1/lyrebird/internal/domain"
 	"github.com/brienze1/lyrebird/internal/usecase"
 )
@@ -30,10 +31,16 @@ type TrafficSummaryDTO struct {
 // `request.json.<path>` directly instead of decoding base64 themselves. It is
 // omitted entirely for non-JSON and empty bodies, so nothing about the existing
 // shape changes for consumers that only read Body.
+//
+// Form is the same idea for a body declared application/x-www-form-urlencoded:
+// the decoded fields, key -> first value, addressable as `request.form.<key>`.
+// It is omitted for every other body, for one that does not decode, and for a
+// truncated one (a cut form still parses, but its last value would be wrong).
 type RecordedMessageDTO struct {
 	Headers       map[string][]string `json:"headers"`
 	Body          []byte              `json:"body"`
 	JSON          json.RawMessage     `json:"json,omitempty"`
+	Form          map[string]string   `json:"form,omitempty"`
 	BodyTruncated bool                `json:"body_truncated"`
 	BodyTotalSize int64               `json:"body_total_size"`
 }
@@ -59,6 +66,7 @@ func TrafficToSummaryDTO(t domain.TrafficRecord) TrafficSummaryDTO {
 func RecordedMessageToDTO(m usecase.RecordedMessage) RecordedMessageDTO {
 	return RecordedMessageDTO{
 		Headers: m.Headers, Body: m.Body, JSON: jsonBodyOrNil(m.Body),
+		Form:          formBodyOrNil(m),
 		BodyTruncated: m.BodyTruncated, BodyTotalSize: m.BodyTotalSize,
 	}
 }
@@ -73,4 +81,14 @@ func jsonBodyOrNil(body []byte) json.RawMessage {
 		return nil
 	}
 	return json.RawMessage(body)
+}
+
+// formBodyOrNil returns m's decoded form fields when its body is a declared,
+// decodable, untruncated form, else nil (so the field is omitted).
+func formBodyOrNil(m usecase.RecordedMessage) map[string]string {
+	if m.BodyTruncated {
+		return nil
+	}
+	fields, _ := jsonpath.FormFields(m.Headers, m.Body)
+	return fields
 }

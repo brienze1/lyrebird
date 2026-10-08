@@ -62,7 +62,7 @@ func TestListTrafficReturnsDecodedSummaries(t *testing.T) {
 func TestListTrafficParsesQueryFilters(t *testing.T) {
 	uc := &fakeListTrafficUseCase{}
 	rr := httptest.NewRecorder()
-	ListTraffic(uc)(rr, newGetRequest(t, "/__lyrebird/traffic?method=POST&host=api.local&path_prefix=/v1&status=404&since=2024-01-01T00:00:00Z&until=2024-06-01T00:00:00Z&limit=10"))
+	ListTraffic(uc)(rr, newGetRequest(t, "/__lyrebird/traffic?method=POST&host=api.local&path_prefix=/v1&status=404&since=2024-01-01T00:00:00Z&until=2024-06-01T00:00:00Z&limit=10&matched_mock_id=mock-1"))
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
@@ -76,6 +76,9 @@ func TestListTrafficParsesQueryFilters(t *testing.T) {
 	}
 	if f.Since == nil || f.Until == nil {
 		t.Fatalf("Since/Until = %v/%v, want both parsed", f.Since, f.Until)
+	}
+	if f.MatchedMockID != "mock-1" {
+		t.Errorf("MatchedMockID = %q, want mock-1", f.MatchedMockID)
 	}
 }
 
@@ -276,5 +279,56 @@ func TestListTrafficRejectsNegativeLimitEndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "invalid traffic filter") {
 		t.Errorf("body = %s, want it to mention %q", rr.Body, "invalid traffic filter")
+	}
+}
+
+func TestListTrafficRejectsBlankMatchedMockIDEndToEnd(t *testing.T) {
+	uc := usecase.NewListTraffic(noopTrafficRepo{})
+	rr := httptest.NewRecorder()
+	ListTraffic(uc)(rr, newGetRequest(t, "/__lyrebird/traffic?matched_mock_id=%20mock-1"))
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for a whitespace-padded matched_mock_id (body: %s)", rr.Code, rr.Body)
+	}
+	if !strings.Contains(rr.Body.String(), "matched_mock_id") {
+		t.Errorf("body = %s, want it to name matched_mock_id", rr.Body)
+	}
+}
+
+func TestGetTrafficExposesRecordedFormBodyAsForm(t *testing.T) {
+	req, err := usecase.EncodeRecordedMessage(usecase.RecordedMessage{
+		Headers: map[string][]string{"Content-Type": {"application/x-www-form-urlencoded"}},
+		Body:    []byte("channel=C1&text=hello+world"),
+	})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	resp, err := usecase.EncodeRecordedMessage(usecase.RecordedMessage{Body: []byte(`{"ok":true}`)})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	uc := &fakeGetTrafficUseCase{record: domain.TrafficRecord{ID: "t1", Request: req, Response: resp}}
+	rr := httptest.NewRecorder()
+	r := newGetRequest(t, "/__lyrebird/traffic/t1")
+	r.SetPathValue("id", "t1")
+	GetTraffic(uc)(rr, r)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rr.Code, rr.Body)
+	}
+	var got struct {
+		Request struct {
+			Form map[string]string `json:"form"`
+		} `json:"request"`
+		Response map[string]any `json:"response"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Request.Form["text"] != "hello world" || got.Request.Form["channel"] != "C1" {
+		t.Errorf("request.form = %v, want channel=C1 text=%q", got.Request.Form, "hello world")
+	}
+	if _, ok := got.Response["form"]; ok {
+		t.Errorf("response.form present for a JSON response: %v", got.Response)
 	}
 }

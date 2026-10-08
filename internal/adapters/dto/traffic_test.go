@@ -95,3 +95,47 @@ func TestRecordedMessageDTOWireShape(t *testing.T) {
 		}
 	})
 }
+
+func TestRecordedMessageToDTODecodesFormBody(t *testing.T) {
+	form := map[string][]string{"Content-Type": {"application/x-www-form-urlencoded"}}
+
+	out := RecordedMessageToDTO(usecase.RecordedMessage{Headers: form, Body: []byte("channel=C1&text=hello+world&text=2")})
+	if out.Form["channel"] != "C1" || out.Form["text"] != "hello world" || len(out.Form) != 2 {
+		t.Fatalf("Form = %v, want channel=C1 text=%q", out.Form, "hello world")
+	}
+	if out.JSON != nil {
+		t.Errorf("JSON = %s, want nil for a form body", out.JSON)
+	}
+
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"form":{"channel":"C1","text":"hello world"}`) {
+		t.Errorf("wire = %s, want a form object", raw)
+	}
+}
+
+func TestRecordedMessageToDTOOmitsFormOtherwise(t *testing.T) {
+	form := map[string][]string{"Content-Type": {"application/x-www-form-urlencoded"}}
+	for name, msg := range map[string]usecase.RecordedMessage{
+		"json body":          {Headers: map[string][]string{"Content-Type": {"application/json"}}, Body: []byte(`{"a":1}`)},
+		"undeclared form":    {Headers: map[string][]string{"Content-Type": {"text/plain"}}, Body: []byte("a=1")},
+		"no headers":         {Body: []byte("a=1")},
+		"empty form":         {Headers: form},
+		"undecodable form":   {Headers: form, Body: []byte("a=%zz")},
+		"truncated form":     {Headers: form, Body: []byte("a=1&b=tru"), BodyTruncated: true},
+		"json declared form": {Headers: form, Body: []byte(`{"a":1}`)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := RecordedMessageToDTO(msg)
+			if out.Form != nil {
+				t.Errorf("Form = %v, want nil", out.Form)
+			}
+			raw, _ := json.Marshal(out)
+			if strings.Contains(string(raw), `"form"`) {
+				t.Errorf("wire = %s, want no form key", raw)
+			}
+		})
+	}
+}

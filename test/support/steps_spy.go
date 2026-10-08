@@ -185,6 +185,16 @@ func (t *spyState) iSendAPOSTRequestToOnTheDataPlaneWithHostAndJSONBody(ctx cont
 	return t.sendRequest(ctx, http.MethodPost, path, host, "", []byte(jsonBody), headers)
 }
 
+func (t *spyState) iSendAPOSTRequestToOnTheDataPlaneWithHostAndFormBody(ctx context.Context, path, host, formBody string) error {
+	headers := map[string]string{"Content-Type": "application/x-www-form-urlencoded"}
+	return t.sendRequest(ctx, http.MethodPost, path, host, "", []byte(formBody), headers)
+}
+
+func (t *spyState) iSendAPOSTRequestToOnTheDataPlaneWithHostAndPlainTextBody(ctx context.Context, path, host, body string) error {
+	headers := map[string]string{"Content-Type": "text/plain"}
+	return t.sendRequest(ctx, http.MethodPost, path, host, "", []byte(body), headers)
+}
+
 func (t *spyState) theFakeUpstreamReceivedRequests(want int) error {
 	got := t.lastFakeUpstream.RequestCount()
 	if got != want {
@@ -371,6 +381,10 @@ func RegisterSpySteps(sc *godog.ScenarioContext, s *appState) {
 		t.iSendAGETRequestToOnTheDataPlaneWithHostAndHeader)
 	sc.Step(`^I send a POST request to "([^"]*)" on the data plane with host "([^"]*)" and JSON body '(.*)'$`,
 		t.iSendAPOSTRequestToOnTheDataPlaneWithHostAndJSONBody)
+	sc.Step(`^I send a POST request to "([^"]*)" on the data plane with host "([^"]*)" and form body '(.*)'$`,
+		t.iSendAPOSTRequestToOnTheDataPlaneWithHostAndFormBody)
+	sc.Step(`^I send a POST request to "([^"]*)" on the data plane with host "([^"]*)" and plain-text body '(.*)'$`,
+		t.iSendAPOSTRequestToOnTheDataPlaneWithHostAndPlainTextBody)
 	sc.Step(`^the fake upstream received (\d+) requests?$`, t.theFakeUpstreamReceivedRequests)
 
 	sc.Step(`^the response status is (\d+)$`, t.theResponseStatusIs)

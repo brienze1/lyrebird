@@ -65,6 +65,18 @@ Feature: Mock overrides
     When I send a POST request to "/order-dollar" on the data plane with host "example.local" and JSON body '{"tier":"basic"}'
     Then the recorded traffic for that request has decision "proxied"
 
+  Scenario: A body condition also addresses a form-encoded body, by field name
+    Given Lyrebird boots
+    And an upstream "example.local" configured in partition "default" pointing at a fake upstream
+    And a mock named "form-post" matching POST path "/chat.postMessage" with body path "text" equals "hello world" that responds 200 with body "posted"
+    When I send a POST request to "/chat.postMessage" on the data plane with host "example.local" and form body 'channel=C1&text=hello+world'
+    Then the response status is 200
+    And the response body is "posted"
+    When I send a POST request to "/chat.postMessage" on the data plane with host "example.local" and form body 'channel=C1&text=bye'
+    Then the recorded traffic for that request has decision "proxied"
+    When I send a POST request to "/chat.postMessage" on the data plane with host "example.local" and plain-text body 'channel=C1&text=hello+world'
+    Then the recorded traffic for that request has decision "proxied"
+
   Scenario: Validation expressed as an ordinary matching + response rule
     Given Lyrebird boots
     And an upstream "example.local" configured in partition "default" pointing at a fake upstream

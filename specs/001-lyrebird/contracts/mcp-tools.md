@@ -42,7 +42,7 @@ contracts/admin-rest.md — the one route explicitly exempt from the auth gate) 
 
 | Tool | Input | Output | Requirement |
 |------|-------|--------|-------------|
-| `list_traffic` | `{ space?, host?, path?, status?, since?, limit? }` | Traffic summaries. | FR-021 |
+| `list_traffic` | `{ space?, method?, host?, path?, status?, since?, until?, limit?, matched_mock_id?, request_body_path?, request_body_equals? }` | Traffic summaries. | FR-021 |
 | `get_traffic` | `{ space?, id }` | Full request + response (decrypted). | FR-002, FR-021 |
 | `inspect_requests` | `{ space?, limit? }` | Recent requests (debug why a mock missed). | FR-021 |
 | `metrics` | `{ space?, window? }` | Counts + latency aggregated by mock/path/status. | FR-021 |
