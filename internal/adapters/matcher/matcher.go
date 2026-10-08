@@ -122,14 +122,22 @@ func (e *Engine) Matches(m domain.Match, in usecase.MatchInput) (bool, []usecase
 		overall = overall && passed
 	}
 
+	// A declared form body (application/x-www-form-urlencoded) is addressed
+	// as a flat key -> first-value object; JSON and everything else are
+	// evaluated verbatim, exactly as before. Computed once, not per condition.
+	var doc []byte
+	if len(m.Body) > 0 {
+		doc = jsonpath.Document(in.Header, in.Body)
+	}
 	for _, bm := range m.Body {
 		// gjson never panics on malformed/truncated JSON — it fails closed,
 		// reporting the path as not present, which evalMatcher then treats
 		// like any other absent field. Worth remembering if a JSONPath
 		// condition near the tail of a very large body ever "mysteriously"
 		// misses: it may be peekBody's cap truncating the body mid-token,
-		// not a matcher bug.
-		result := jsonpath.GetBytes(in.Body, bm.Path)
+		// not a matcher bug. A form body cut by that cap still decodes, but
+		// its last field's value is then incomplete.
+		result := jsonpath.GetBytes(doc, bm.Path)
 		actual, present := result.String(), result.Exists()
 		passed := evalMatcher(bm.Matcher, actual, present)
 		results = append(results, usecase.ConditionResult{Field: "body." + bm.Path, Expected: describeMatcher(bm.Matcher), Actual: actual, Passed: passed})

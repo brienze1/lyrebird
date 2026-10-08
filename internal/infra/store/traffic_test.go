@@ -281,3 +281,39 @@ func TestClearTrafficOnlyAffectsItsPartition(t *testing.T) {
 		t.Fatalf("ListTraffic(other) after clearing default = %+v, %v, want untouched", gotOther, err)
 	}
 }
+
+func TestListTrafficFiltersByMatchedMockID(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	mine, other := "mock-mine", "mock-other"
+	a := sampleTraffic("a", "default", now)
+	a.MatchedMockID = &mine
+	b := sampleTraffic("b", "default", now.Add(time.Millisecond))
+	b.MatchedMockID = &other
+	c := sampleTraffic("c", "default", now.Add(2*time.Millisecond)) // proxied, no mock
+	d := sampleTraffic("d", "team-b", now.Add(3*time.Millisecond))
+	d.MatchedMockID = &mine
+	for _, rec := range []domain.TrafficRecord{a, b, c, d} {
+		if err := st.AppendTraffic(ctx, rec); err != nil {
+			t.Fatalf("AppendTraffic(%s): %v", rec.ID, err)
+		}
+	}
+
+	got, err := st.ListTraffic(ctx, "default", usecase.TrafficFilter{MatchedMockID: mine})
+	if err != nil {
+		t.Fatalf("ListTraffic(): %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "a" {
+		t.Fatalf("ListTraffic(matched_mock_id=%s) = %d records, want only \"a\"", mine, len(got))
+	}
+
+	all, err := st.ListTraffic(ctx, "default", usecase.TrafficFilter{})
+	if err != nil {
+		t.Fatalf("ListTraffic(): %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("unfiltered = %d records, want 3", len(all))
+	}
+}

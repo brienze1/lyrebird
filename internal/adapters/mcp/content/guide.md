@@ -46,9 +46,19 @@ real `GET /ping` — it will return `pong` without ever reaching any upstream.
 `{jsonpath, equals|contains|regex|exists}`). An empty `match` matches every request — useful as a
 catch-all fallback at low priority.
 
+Body paths also address form posts: when a request declares `Content-Type:
+application/x-www-form-urlencoded` (and its body is not JSON), the body is read as a flat object of
+field → first value, so `channel=C1&text=hello+world` matches `{"jsonpath":"text","equals":"hello
+world"}`. Nothing is guessed from the bytes — an undeclared `a=b` body is not a form. A field name
+containing `.` must be escaped (`user\.name`). JSON bodies behave exactly as always.
+
 ## Traffic & metrics
 
-`list_traffic`/`get_traffic`/`inspect_requests` let you see what actually happened; `metrics`
+`list_traffic`/`get_traffic`/`inspect_requests` let you see what actually happened. `list_traffic`
+filters by `matched_mock_id` (only traffic a given mock answered) and by
+`request_body_path`+`request_body_equals` (same path syntax as body matchers, form posts included).
+`get_traffic` returns each message's decoded body as `json` (JSON bodies) or `form` (form posts,
+field → first value), so assert on `request.json.<path>` or `request.form.<field>`. `metrics`
 aggregates counts and latency by mock/path/status; `reset` clears ephemeral mocks (and optionally
 traffic) while preserving seeded fixtures.
 

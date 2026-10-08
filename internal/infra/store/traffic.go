@@ -95,6 +95,10 @@ func (s *Store) ListTraffic(ctx context.Context, partition string, filter usecas
 		q += ` AND status = ?`
 		args = append(args, *filter.Status)
 	}
+	if filter.MatchedMockID != "" {
+		q += ` AND matched_mock_id = ?`
+		args = append(args, filter.MatchedMockID)
+	}
 	if filter.Since != nil {
 		q += ` AND "timestamp" >= ?`
 		args = append(args, filter.Since.UnixMilli())
