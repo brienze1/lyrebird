@@ -40,6 +40,9 @@ type outbound struct {
 	// closeAfter drops the connection once this frame is written. Only the
 	// reset fault sets it, and it sets it with no bytes at all.
 	closeAfter bool
+	// cadence marks a tick of the endpoint's own cadence, so its record can
+	// be bounded (recordOutbound) — never anything a scenario caused.
+	cadence bool
 	// result is how writeLoop reports this specific frame's write-and-record
 	// outcome back to queue, which sets it on every call — buffered by one so
 	// writeLoop's send can never block on it.
@@ -70,6 +73,11 @@ type conn struct {
 	handler  *Handler
 	registry *Registry
 	log      *slog.Logger
+
+	// cadenceRecorded counts this connection's recorded cadence ticks, so the
+	// trim runs once every cadenceKeep of them rather than on every tick.
+	// Only the writer goroutine touches it.
+	cadenceRecorded int
 }
 
 func newConn(nc net.Conn, partition string, endpoint domain.Endpoint, hs handshake, h *Handler, reg *Registry, log *slog.Logger) *conn {

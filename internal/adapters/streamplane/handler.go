@@ -76,7 +76,18 @@ type Handler struct {
 	bodyCap int64
 	clock   usecase.Clock
 	cadence cadenceResolver
-	log     *slog.Logger
+	// prune and cadenceKeep bound a cadence's own tick records (see
+	// recordOutbound). A nil prune or a zero keep records every tick, the
+	// plane's original behaviour.
+	prune       cadenceTrafficPruner
+	cadenceKeep int
+	log         *slog.Logger
+}
+
+// cadenceTrafficPruner trims a stream endpoint's cadence-tick records to the
+// newest keep (store.PruneCadenceTraffic).
+type cadenceTrafficPruner interface {
+	PruneCadenceTraffic(ctx context.Context, partition, path string, keep int) error
 }
 
 // frameProjector is the usecase.BodyProjector for one frame: it answers "what

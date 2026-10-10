@@ -91,6 +91,32 @@ func (h *Handler) recordOutbound(ctx context.Context, c *conn, o outbound) {
 
 		LatencyMS: latencyMS,
 	})
+
+	if o.cadence {
+		h.boundCadenceTraffic(ctx, c)
+	}
+}
+
+// boundCadenceTraffic keeps a cadence's own tick records from growing without
+// bound. A cadence is unprompted and never stops: cb5/gps ticks every 2ms,
+// about 500 records a second, which on a stack left up for a working day grew
+// one store past a gigabyte and slowed every traffic query and admin call
+// sharing it. The ticks are identical and nothing reads more than the latest
+// few, so once every cadenceKeep ticks the older ones are trimmed, leaving
+// between cadenceKeep and 2×cadenceKeep. Every tick is still recorded, with
+// exactly the shape it always had; and like any recording failure, a failed
+// trim is logged, never allowed to fail the frame (Principle III).
+func (h *Handler) boundCadenceTraffic(ctx context.Context, c *conn) {
+	if h.prune == nil || h.cadenceKeep <= 0 {
+		return
+	}
+	c.cadenceRecorded++
+	if c.cadenceRecorded%h.cadenceKeep != 0 {
+		return
+	}
+	if err := h.prune.PruneCadenceTraffic(ctx, c.partition, "/"+c.endpoint.Name, h.cadenceKeep); err != nil {
+		h.log.Warn("streamplane: bounding cadence traffic failed", "endpoint", c.endpoint.Name, "err", err)
+	}
 }
 
 // recordOversized records the one thing that has no frame to show for it: a

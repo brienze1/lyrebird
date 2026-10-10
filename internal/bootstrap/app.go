@@ -428,6 +428,10 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 			Record:    c.recordTrafficUC,
 			Endpoints: c.endpointsUC,
 			Cadence:   c.cadenceOverrideUC,
+			// Bounds each cadence's own tick records (cb5/gps ticks every
+			// 2ms); every other record keeps the traffic TTL.
+			PruneCadence:       c.store,
+			CadenceTrafficKeep: cfg.StreamCadenceTrafficKeep,
 			// The SAME registry the emit_frame and reset use cases hold, so
 			// an injection reaches the connection this listener is serving
 			// and a reset closes it.

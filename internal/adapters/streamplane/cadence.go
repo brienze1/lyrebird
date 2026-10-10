@@ -160,6 +160,7 @@ func (c *conn) runCadence(ctx context.Context, declared *domain.Cadence) {
 			bytes:     bytes,
 			direction: domain.StreamDirectionEmit,
 			decision:  domain.DecisionMocked,
+			cadence:   true,
 		}); err != nil {
 			return
 		}
