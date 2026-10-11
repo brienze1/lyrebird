@@ -119,6 +119,7 @@ Every variable is optional; Lyrebird runs with sane defaults if none are set.
 | `LYREBIRD_UPSTREAM_TIMEOUT` | timeout for a proxied call to the real upstream | `10s` |
 | `LYREBIRD_SCRIPT_TIMEOUT` | execution cap for a mock's match/respond JS script | `100ms` |
 | `LYREBIRD_BODY_CAP_BYTES` | max request/response body size recorded to the traffic log | `1048576` (1 MiB) |
+| `LYREBIRD_STREAM_CADENCE_TRAFFIC_KEEP` | how many of a stream cadence's own tick records the traffic log keeps per space and endpoint (older ticks are trimmed; every other record keeps `LYREBIRD_TRAFFIC_TTL`); `0` keeps them all | `1000` |
 | `LYREBIRD_ALLOW_PROXY_HOSTS` | comma-separated allow-list of hosts the proxy may forward to | unset — every host allowed |
 | `LYREBIRD_AUTH_KEYS` | comma-separated client keys; **presence enables control-plane auth** | unset — control plane open |
 | `LYREBIRD_TOKEN_TTL` | TTL of a JWT issued by `POST /__lyrebird/auth/token` (only relevant once auth is enabled) | `1h` |

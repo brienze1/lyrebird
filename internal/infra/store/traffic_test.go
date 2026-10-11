@@ -317,3 +317,63 @@ func TestListTrafficFiltersByMatchedMockID(t *testing.T) {
 		t.Fatalf("unfiltered = %d records, want 3", len(all))
 	}
 }
+
+// TestPruneCadenceTrafficKeepsOnlyTheNewestTicks proves the bound on a
+// cadence's own records: of an endpoint's cadence ticks (EMIT, stream,
+// mocked, no matched mock) only the newest keep survive, while every record
+// of any other shape — a plain injection, a rule-answered emission, an
+// inbound frame, the same shape on another endpoint or in another space — is
+// left exactly where it was.
+func TestPruneCadenceTrafficKeepsOnlyTheNewestTicks(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	base := time.UnixMilli(1_700_000_000_000)
+
+	stream := func(id, partition, path, method string, decision domain.Decision, mockID *string, at int) domain.TrafficRecord {
+		return domain.TrafficRecord{
+			ID: id, Partition: partition, Timestamp: base.Add(time.Duration(at) * time.Millisecond),
+			Method: method, Host: domain.StreamHost, Path: path, Decision: decision, MatchedMockID: mockID,
+		}
+	}
+	rule := "rule-1"
+	var all []domain.TrafficRecord
+	for i := 0; i < 10; i++ {
+		all = append(all, stream(fmt.Sprintf("tick-%d", i), "cb5", "/gps", domain.StreamDirectionEmit, domain.DecisionMocked, nil, i*2))
+	}
+	keepers := []domain.TrafficRecord{
+		stream("injected", "cb5", "/gps", domain.StreamDirectionEmit, domain.DecisionNotConfigured, nil, 1),
+		stream("answered", "cb5", "/gps", domain.StreamDirectionEmit, domain.DecisionMocked, &rule, 3),
+		stream("inbound", "cb5", "/gps", domain.StreamDirectionIn, domain.DecisionMocked, nil, 5),
+		stream("other-endpoint", "cb5", "/spp", domain.StreamDirectionEmit, domain.DecisionMocked, nil, 0),
+		stream("other-space", "default", "/gps", domain.StreamDirectionEmit, domain.DecisionMocked, nil, 0),
+	}
+	for _, r := range append(all, keepers...) {
+		if err := st.AppendTraffic(ctx, r); err != nil {
+			t.Fatalf("AppendTraffic(%s): %v", r.ID, err)
+		}
+	}
+
+	if err := st.PruneCadenceTraffic(ctx, "cb5", "/gps", 3); err != nil {
+		t.Fatalf("PruneCadenceTraffic(): %v", err)
+	}
+
+	for i := 0; i < 10; i++ {
+		_, err := st.GetTraffic(ctx, "cb5", fmt.Sprintf("tick-%d", i))
+		kept := err == nil
+		if want := i >= 7; kept != want {
+			t.Errorf("tick-%d kept = %v, want %v (only the newest 3 ticks survive)", i, kept, want)
+		}
+	}
+	for _, r := range keepers {
+		if _, err := st.GetTraffic(ctx, r.Partition, r.ID); err != nil {
+			t.Errorf("%s was pruned (%v); only cadence ticks on this endpoint and space may be", r.ID, err)
+		}
+	}
+
+	if err := st.PruneCadenceTraffic(ctx, "cb5", "/gps", 0); err != nil {
+		t.Fatalf("PruneCadenceTraffic(keep=0): %v", err)
+	}
+	if _, err := st.GetTraffic(ctx, "cb5", "tick-9"); err != nil {
+		t.Errorf("keep=0 deleted a tick (%v); it must delete nothing", err)
+	}
+}

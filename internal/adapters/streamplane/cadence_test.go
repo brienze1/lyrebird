@@ -3,8 +3,10 @@ package streamplane
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -197,5 +199,71 @@ func TestCadenceTickRecordIsUnchangedByEmissionInterception(t *testing.T) {
 	}
 	if got := rec.records[0].Method; got != domain.StreamDirectionEmit {
 		t.Errorf("cadence-tick Method = %q, want %q", got, domain.StreamDirectionEmit)
+	}
+}
+
+// pruneSpy records each cadence-traffic trim the handler asks for.
+type pruneSpy struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (p *pruneSpy) PruneCadenceTraffic(_ context.Context, partition, path string, keep int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls = append(p.calls, fmt.Sprintf("%s %s %d", partition, path, keep))
+	return nil
+}
+
+func (p *pruneSpy) count() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.calls)
+}
+
+// TestCadenceTicksAreBoundedEveryKeepTicks proves the trim's cadence: every
+// tick is still recorded, and the handler asks for the endpoint's ticks to be
+// trimmed to the newest keep once per keep ticks — not on every tick, which
+// would put a DELETE on a 2ms hot path.
+func TestCadenceTicksAreBoundedEveryKeepTicks(t *testing.T) {
+	c, client := newTestConn(t)
+	rec := &capturingRecorder{}
+	spy := &pruneSpy{}
+	c.handler = &Handler{
+		record: rec, clock: systemClock{}, prune: spy, cadenceKeep: 4,
+		log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	cad := &domain.Cadence{
+		Interval:  0,
+		Frames:    [][]domain.FramePart{{{Text: ptr("TICK")}}},
+		OnExhaust: domain.OnExhaustionRepeatLast,
+	}
+	cancel := startCadence(t, c, cad)
+	defer cancel()
+
+	r := bufio.NewReader(client)
+	if err := client.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	for i := 0; i < 12; i++ {
+		if _, err := r.ReadString('\n'); err != nil {
+			t.Fatalf("reading tick %d: %v", i+1, err)
+		}
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(rec.decisions()) < 12 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+
+	recorded := len(rec.decisions())
+	if recorded < 12 {
+		t.Fatalf("recorded %d ticks, want every tick (>= 12) still recorded", recorded)
+	}
+	if got, want := spy.count(), recorded/4; got != want {
+		t.Errorf("trims = %d for %d recorded ticks, want %d (one per 4)", got, recorded, want)
+	}
+	if spy.count() > 0 && spy.calls[0] != c.partition+" /"+c.endpoint.Name+" 4" {
+		t.Errorf("trim = %q, want this connection's space and endpoint, keep 4", spy.calls[0])
 	}
 }

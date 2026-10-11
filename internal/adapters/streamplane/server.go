@@ -44,7 +44,12 @@ type Deps struct {
 	// entirely — every cadence then always emits its declared content, the
 	// plane's original behaviour.
 	Cadence cadenceResolver
-	Log     *slog.Logger
+	// PruneCadence and CadenceTrafficKeep bound each cadence's own tick
+	// records to the newest CadenceTrafficKeep per space and endpoint. Nil or
+	// zero records every tick, the plane's original behaviour.
+	PruneCadence       cadenceTrafficPruner
+	CadenceTrafficKeep int
+	Log                *slog.Logger
 }
 
 // Server is the byte-stream data-plane listener. It accepts TCP connections,
@@ -81,14 +86,16 @@ func New(d Deps) *Server {
 		registry: registry,
 		log:      log,
 		handler: &Handler{
-			match:   d.Match,
-			record:  d.Record,
-			tpl:     d.Templater,
-			script:  d.Script,
-			bodyCap: d.BodyCapBytes,
-			clock:   d.Clock,
-			cadence: d.Cadence,
-			log:     log,
+			match:       d.Match,
+			record:      d.Record,
+			tpl:         d.Templater,
+			script:      d.Script,
+			bodyCap:     d.BodyCapBytes,
+			clock:       d.Clock,
+			cadence:     d.Cadence,
+			prune:       d.PruneCadence,
+			cadenceKeep: d.CadenceTrafficKeep,
+			log:         log,
 		},
 	}
 }

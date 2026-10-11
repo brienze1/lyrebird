@@ -139,6 +139,36 @@ func (s *Store) ListTraffic(ctx context.Context, partition string, filter usecas
 	return out, rows.Err()
 }
 
+// PruneCadenceTraffic keeps only the newest keep cadence-tick records on one
+// stream endpoint in partition, deleting the older ones. A cadence tick is
+// identified by the shape the byte-stream plane gives it and nothing else
+// does (streamplane's cadence loop, guarded by its AC-2 test): an EMIT on
+// host "stream", decision "mocked", with NO matched mock — a plain injection
+// is not_configured, and an emission a rule answered carries the rule's id.
+// So no frame a scenario caused is ever touched. keep <= 0 deletes nothing.
+func (s *Store) PruneCadenceTraffic(ctx context.Context, partition, path string, keep int) error {
+	if keep <= 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+		DELETE FROM traffic
+		WHERE "partition" = ? AND host = ? AND path = ? AND method = ? AND decision = ?
+		  AND matched_mock_id IS NULL
+		  AND "timestamp" < (
+		    SELECT "timestamp" FROM traffic
+		    WHERE "partition" = ? AND host = ? AND path = ? AND method = ? AND decision = ?
+		      AND matched_mock_id IS NULL
+		    ORDER BY "timestamp" DESC LIMIT 1 OFFSET ?)`,
+		partition, domain.StreamHost, path, domain.StreamDirectionEmit, string(domain.DecisionMocked),
+		partition, domain.StreamHost, path, domain.StreamDirectionEmit, string(domain.DecisionMocked),
+		keep-1,
+	)
+	if err != nil {
+		return fmt.Errorf("store: prune cadence traffic: %w", err)
+	}
+	return nil
+}
+
 // ClearTraffic deletes every traffic record in partition.
 func (s *Store) ClearTraffic(ctx context.Context, partition string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM traffic WHERE "partition" = ?`, partition)

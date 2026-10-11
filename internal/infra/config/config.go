@@ -31,11 +31,19 @@ type Config struct {
 	// feature (003's FR-001/FR-026, constitution Principle V). Like every
 	// other data plane, it is never authenticated.
 	StreamPlaneAddr string
-	TrafficTTL      time.Duration
-	DefaultSpace    string
-	AllowProxyHosts []string
-	AuthKeys        []string
-	TokenTTL        time.Duration
+	// StreamCadenceTrafficKeep bounds how many of a cadence's own tick
+	// records the traffic log keeps per space and endpoint
+	// (LYREBIRD_STREAM_CADENCE_TRAFFIC_KEEP, default 1000; 0 keeps them
+	// all). A cadence is unprompted and unbounded — cb5/gps ticks every 2ms,
+	// about 500 rows a second — so without a bound it alone grows the store
+	// by tens of millions of rows a day and slows every query over it. Only
+	// cadence ticks are trimmed: every other record keeps TrafficTTL.
+	StreamCadenceTrafficKeep int
+	TrafficTTL               time.Duration
+	DefaultSpace             string
+	AllowProxyHosts          []string
+	AuthKeys                 []string
+	TokenTTL                 time.Duration
 	// DataKeyB64 is the raw, still-encoded LYREBIRD_DATA_KEY value, if any.
 	// Decoding into an actual key is internal/infra/crypto's job.
 	DataKeyB64      string
@@ -103,6 +111,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.ScriptTimeout, err = parsePositiveDuration("LYREBIRD_SCRIPT_TIMEOUT", "100ms"); err != nil {
+		return Config{}, err
+	}
+	if cfg.StreamCadenceTrafficKeep, err = parseNonNegativeInt("LYREBIRD_STREAM_CADENCE_TRAFFIC_KEEP", 1000); err != nil {
 		return Config{}, err
 	}
 	if cfg.BodyCapBytes, err = parsePositiveInt64("LYREBIRD_BODY_CAP_BYTES", 1<<20); err != nil {
@@ -179,6 +190,18 @@ func parsePositiveInt64(key string, def int64) (int64, error) {
 	n, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || n <= 0 {
 		return 0, fmt.Errorf("config: %s=%q is not a positive integer", key, raw)
+	}
+	return n, nil
+}
+
+func parseNonNegativeInt(key string, def int) (int, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("config: %s=%q is not a non-negative integer", key, raw)
 	}
 	return n, nil
 }

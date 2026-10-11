@@ -165,3 +165,23 @@ func TestLoadMCPStdioParsesBoolean(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadStreamCadenceTrafficKeep(t *testing.T) {
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	if cfg.StreamCadenceTrafficKeep != 1000 {
+		t.Errorf("default StreamCadenceTrafficKeep = %d, want 1000", cfg.StreamCadenceTrafficKeep)
+	}
+
+	t.Setenv("LYREBIRD_STREAM_CADENCE_TRAFFIC_KEEP", "0")
+	if cfg, err = Load(); err != nil || cfg.StreamCadenceTrafficKeep != 0 {
+		t.Errorf("Load() with 0 = (%d, %v), want 0 (keep every tick) and no error", cfg.StreamCadenceTrafficKeep, err)
+	}
+
+	t.Setenv("LYREBIRD_STREAM_CADENCE_TRAFFIC_KEEP", "-1")
+	if _, err := Load(); err == nil {
+		t.Error("Load() with a negative LYREBIRD_STREAM_CADENCE_TRAFFIC_KEEP, want error")
+	}
+}
