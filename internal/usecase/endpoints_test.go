@@ -80,6 +80,24 @@ type fakeRegistry struct {
 	occupied     map[string]bool
 	emitted      []string
 	emitErr      error
+	cadenceErr   error
+	cadenceCalls []string
+}
+
+func (f *fakeRegistry) PauseCadence(_ context.Context, partition, endpoint string) error {
+	if f.cadenceErr != nil {
+		return f.cadenceErr
+	}
+	f.cadenceCalls = append(f.cadenceCalls, "pause:"+partition+"/"+endpoint)
+	return nil
+}
+
+func (f *fakeRegistry) ResumeCadence(_ context.Context, partition, endpoint string) error {
+	if f.cadenceErr != nil {
+		return f.cadenceErr
+	}
+	f.cadenceCalls = append(f.cadenceCalls, "resume:"+partition+"/"+endpoint)
+	return nil
 }
 
 func (f *fakeRegistry) Emit(_ context.Context, partition, endpoint string, spec []byte) error {
