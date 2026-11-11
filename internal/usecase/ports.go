@@ -324,6 +324,14 @@ type ConnectionRegistry interface {
 	// endpoint, which the caller surfaces plainly rather than succeeding
 	// silently (FR-015).
 	Emit(ctx context.Context, partition, endpoint string, frameSpec []byte) error
+	// PauseCadence stops the cadence of the stand-in holding this endpoint
+	// from queueing further frames and returns once every frame it had
+	// already queued is on the wire. It reports domain.ErrNotFound when
+	// nothing holds the endpoint. Idempotent.
+	PauseCadence(ctx context.Context, partition, endpoint string) error
+	// ResumeCadence lets a paused cadence emit again from its next tick. It
+	// reports domain.ErrNotFound when nothing holds the endpoint. Idempotent.
+	ResumeCadence(ctx context.Context, partition, endpoint string) error
 	// CloseSpace stops every cadence and closes every connection in the
 	// partition, so nothing survives a reset by being mid-stream (FR-031).
 	CloseSpace(partition string)

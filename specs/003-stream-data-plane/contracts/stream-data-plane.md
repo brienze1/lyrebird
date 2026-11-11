@@ -77,6 +77,11 @@ pairs become `MatchInput.Header` entries, so a rule can condition on them.
 - **Injection** — `emit_frame` over MCP, `POST /__lyrebird/stream/emit` over Admin REST. Takes the
   space, the endpoint and a frame spec. Returns an explanatory error when no stand-in holds the
   endpoint (FR-015).
+- **Pause and resume** — `pause_cadence` / `POST /__lyrebird/stream/pause` stops the endpoint's
+  cadence on its live connection and returns once every frame it had queued is on the wire;
+  `resume_cadence` / `POST /__lyrebird/stream/resume` lets it emit again from its next tick, with
+  the content resolved at that tick. Injection is unaffected. The pause belongs to the connection:
+  a reset, disconnect or reconnect starts unpaused. No traffic record is written for either call.
 
 Both go through the connection's single writer goroutine, so an emission never interleaves with an
 answer or with another emission, and the emitted order is the delivered order (FR-033). Both are
@@ -186,6 +191,8 @@ in the use-case layer only (constitution Principle II).
 | List endpoints and their occupancy | `list_endpoints` | `GET /__lyrebird/stream/endpoints` |
 | Remove an endpoint | `delete_endpoint` | `DELETE /__lyrebird/stream/endpoints/{name...}` |
 | Inject a frame | `emit_frame` | `POST /__lyrebird/stream/emit` |
+| Pause a cadence | `pause_cadence` | `POST /__lyrebird/stream/pause` |
+| Resume a cadence | `resume_cadence` | `POST /__lyrebird/stream/resume` |
 
 Rules themselves need nothing new: a stream rule is an ordinary mock, so `create_mock`,
 `update_mock`, `delete_mock`, `list_mocks`, `get_mock`, `match_test` and `promote_traffic` all apply

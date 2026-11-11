@@ -109,6 +109,7 @@ type core struct {
 	importSeedsUC     *usecase.ImportSeeds
 	endpointsUC       *usecase.Endpoints
 	emitFrameUC       *usecase.EmitFrame
+	cadencePauseUC    *usecase.CadencePause
 	cadenceOverrideUC *usecase.CadenceOverride
 
 	// streamRegistry is nil unless cfg.StreamPlaneAddr is set. It is built
@@ -204,6 +205,7 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 	cadenceOverrideUC := usecase.NewCadenceOverride(st, sd, matchEval)
 	endpointsUC := usecase.NewEndpoints(st, sd, connRegistry, clock.System{})
 	emitFrameUC := usecase.NewEmitFrame(endpointsUC, connRegistry)
+	cadencePauseUC := usecase.NewCadencePause(endpointsUC, connRegistry)
 	resetUC := usecase.NewReset(st, st, st, st, connRegistry)
 	metricsUC := usecase.NewMetrics(st, clock.System{})
 	promoteTrafficUC := usecase.NewPromoteTraffic(st, mockCRUDUC)
@@ -263,6 +265,7 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 		ImportSeeds:    importSeedsUC,
 		Endpoints:      endpointsUC,
 		EmitFrame:      emitFrameUC,
+		CadencePause:   cadencePauseUC,
 		GetMITMCACert:  getMITMCACertUC,
 	})
 
@@ -274,7 +277,7 @@ func buildCore(ctx context.Context, cfg config.Config, log *slog.Logger) (*core,
 		mockCRUDUC: mockCRUDUC, resetUC: resetUC, metricsUC: metricsUC, promoteTrafficUC: promoteTrafficUC,
 		createSpaceUC: createSpaceUC, listSpacesUC: listSpacesUC, deleteSpaceUC: deleteSpaceUC,
 		exportSeedsUC: exportSeedsUC, importSeedsUC: importSeedsUC,
-		endpointsUC: endpointsUC, emitFrameUC: emitFrameUC, cadenceOverrideUC: cadenceOverrideUC, streamRegistry: streamRegistry,
+		endpointsUC: endpointsUC, emitFrameUC: emitFrameUC, cadencePauseUC: cadencePauseUC, cadenceOverrideUC: cadenceOverrideUC, streamRegistry: streamRegistry,
 		templater: templater, scriptEngine: scriptEngine,
 		mitmCA: mitmCA, getMITMCACertUC: getMITMCACertUC,
 		authIssuer: authIssuer, issueTokenUC: issueTokenUC,
@@ -329,6 +332,8 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	// wildcard would truncate the captured name at the first slash.
 	controlMux.HandleFunc("DELETE /__lyrebird/stream/endpoints/{name...}", httpadmin.DeleteEndpoint(c.endpointsUC))
 	controlMux.HandleFunc("POST /__lyrebird/stream/emit", httpadmin.EmitFrame(c.emitFrameUC))
+	controlMux.HandleFunc("POST /__lyrebird/stream/pause", httpadmin.PauseCadence(c.cadencePauseUC))
+	controlMux.HandleFunc("POST /__lyrebird/stream/resume", httpadmin.ResumeCadence(c.cadencePauseUC))
 	controlMux.HandleFunc("GET /__lyrebird/export", httpadmin.ExportConfig(c.exportSeedsUC))
 	controlMux.HandleFunc("POST /__lyrebird/import", httpadmin.ImportConfig(c.importSeedsUC))
 	controlMux.Handle("/mcp", mcp.Handler(c.mcpServer))

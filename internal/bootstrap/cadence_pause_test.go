@@ -20,7 +20,7 @@ func TestCadencePauseRoutes(t *testing.T) {
 			t.Fatalf("create %s = %d: %s", name, status, raw)
 		}
 	}
-	mk("ticker", map[string]any{"interval": "20ms", "frames": []string{`[{"text":"TICK"}]`}})
+	mk("ticker", map[string]any{"interval": "20ms", "frames": [][]map[string]any{{{"text": "TICK"}}}})
 	mk("plain", nil)
 
 	call := func(path string, body any) int {

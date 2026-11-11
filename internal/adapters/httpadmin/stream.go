@@ -28,6 +28,16 @@ type emitFrameUseCase interface {
 	Execute(ctx context.Context, in usecase.EmitFrameInput) error
 }
 
+type cadencePauseUseCase interface {
+	Pause(ctx context.Context, in usecase.CadencePauseInput) error
+	Resume(ctx context.Context, in usecase.CadencePauseInput) error
+}
+
+// CadenceRequest is the body of POST /__lyrebird/stream/pause and /resume.
+type CadenceRequest struct {
+	Endpoint string `json:"endpoint"`
+}
+
 // EmitFrameRequest is the body of POST /__lyrebird/stream/emit. Frame is the
 // same declarative frame grammar a mock's respond body uses.
 type EmitFrameRequest struct {
@@ -110,3 +120,30 @@ func EmitFrame(uc emitFrameUseCase) http.HandlerFunc {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
+
+func cadenceHandler(call func(context.Context, usecase.CadencePauseInput) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body CadenceRequest
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&body); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err)
+			return
+		}
+		err := call(r.Context(), usecase.CadencePauseInput{
+			Partition: httpmw.PartitionFromContext(r.Context()),
+			Endpoint:  body.Endpoint,
+		})
+		if err != nil {
+			writeUseCaseError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// PauseCadence handles POST /__lyrebird/stream/pause.
+func PauseCadence(uc cadencePauseUseCase) http.HandlerFunc { return cadenceHandler(uc.Pause) }
+
+// ResumeCadence handles POST /__lyrebird/stream/resume.
+func ResumeCadence(uc cadencePauseUseCase) http.HandlerFunc { return cadenceHandler(uc.Resume) }

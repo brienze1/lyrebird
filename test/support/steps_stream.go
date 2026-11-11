@@ -700,8 +700,10 @@ func (g *streamState) cadenceControl(op, endpoint string) error {
 	return nil
 }
 
-func (g *streamState) pauseCadence(endpoint string) error  { return g.cadenceControl("pause", endpoint) }
-func (g *streamState) resumeCadence(endpoint string) error { return g.cadenceControl("resume", endpoint) }
+func (g *streamState) pauseCadence(endpoint string) error { return g.cadenceControl("pause", endpoint) }
+func (g *streamState) resumeCadence(endpoint string) error {
+	return g.cadenceControl("resume", endpoint)
+}
 
 func (g *streamState) injectionRejected() error {
 	if g.lastErr == nil {
