@@ -81,6 +81,23 @@ func (s *swappableResolver) Resolve(_ context.Context, _, _ string) (domain.Mock
 	return *s.mock, true, nil
 }
 
+// settled returns the number of frames the writer wrote, once the reader has
+// consumed them all. After pauseCadence returns, rec's count is exact (the
+// writer records before it processes the barrier); lr.count() lags it by the
+// reader goroutine, so snapshotting lr.count() directly races.
+func settled(t *testing.T, lr *lineReader, rec *capturingRecorder) int {
+	t.Helper()
+	want := len(rec.decisions())
+	deadline := time.Now().Add(2 * time.Second)
+	for lr.count() != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("reader saw %d frames, writer recorded %d", lr.count(), want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return want
+}
+
 func pauseTestConn(t *testing.T, interval time.Duration) (*conn, *lineReader, *capturingRecorder, *swappableResolver, context.CancelFunc) {
 	t.Helper()
 	c, client := newTestConn(t)
@@ -110,7 +127,7 @@ func TestPauseCadence_StopsTicksAndFlushes(t *testing.T) {
 	if err := c.pauseCadence(context.Background()); err != nil {
 		t.Fatalf("pauseCadence: %v", err)
 	}
-	frames := lr.count()
+	frames := settled(t, lr, rec)
 	emits := len(rec.decisions())
 
 	time.Sleep(10 * interval)
@@ -124,14 +141,14 @@ func TestPauseCadence_StopsTicksAndFlushes(t *testing.T) {
 }
 
 func TestPauseCadence_ImmediateModeDoesNotSpin(t *testing.T) {
-	c, lr, _, _, cancel := pauseTestConn(t, 0)
+	c, lr, rec, _, cancel := pauseTestConn(t, 0)
 	defer cancel()
 
 	lr.next(t, 2*time.Second)
 	if err := c.pauseCadence(context.Background()); err != nil {
 		t.Fatalf("pauseCadence: %v", err)
 	}
-	frames := lr.count()
+	frames := settled(t, lr, rec)
 	time.Sleep(200 * time.Millisecond)
 	if got := lr.count(); got != frames {
 		t.Errorf("frames after pause = %d, want %d (parked, not spinning)", got, frames)
@@ -165,7 +182,7 @@ func TestPausedCadence_EmitStillDelivers(t *testing.T) {
 
 func TestResumeCadence_EmitsAgainWithCurrentContent(t *testing.T) {
 	const interval = 20 * time.Millisecond
-	c, lr, _, res, cancel := pauseTestConn(t, interval)
+	c, lr, rec, res, cancel := pauseTestConn(t, interval)
 	defer cancel()
 
 	lr.next(t, 2*time.Second)
@@ -173,7 +190,7 @@ func TestResumeCadence_EmitsAgainWithCurrentContent(t *testing.T) {
 		t.Fatalf("pauseCadence: %v", err)
 	}
 	res.set(cadenceOverrideMock([][]domain.FramePart{{{Text: ptr("OVERRIDE")}}}))
-	frames := lr.count()
+	frames := settled(t, lr, rec)
 
 	c.resumeCadence()
 
@@ -194,7 +211,7 @@ func TestResumeCadence_EmitsAgainWithCurrentContent(t *testing.T) {
 }
 
 func TestPauseResume_Idempotent(t *testing.T) {
-	c, lr, _, _, cancel := pauseTestConn(t, 20*time.Millisecond)
+	c, lr, rec, _, cancel := pauseTestConn(t, 20*time.Millisecond)
 	defer cancel()
 	lr.next(t, 2*time.Second)
 
@@ -204,18 +221,19 @@ func TestPauseResume_Idempotent(t *testing.T) {
 			t.Fatalf("pauseCadence #%d: %v", i+1, err)
 		}
 	}
-	frames := lr.count()
+	frames := settled(t, lr, rec)
 	time.Sleep(100 * time.Millisecond)
 	if got := lr.count(); got != frames {
 		t.Errorf("frames while double-paused grew: %d -> %d", frames, got)
 	}
 	c.resumeCadence()
 	c.resumeCadence()
-	lr.next(t, 2*time.Second) // drain a stale one if any
-	before := lr.count()
-	time.Sleep(200 * time.Millisecond)
-	if lr.count() <= before {
-		t.Error("cadence did not emit after resume")
+	deadline := time.Now().Add(2 * time.Second)
+	for lr.count() <= frames {
+		if time.Now().After(deadline) {
+			t.Fatal("cadence did not emit after resume")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
