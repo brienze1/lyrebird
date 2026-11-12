@@ -96,6 +96,17 @@ type EmitFrameIn struct {
 	Frame    string `json:"frame" jsonschema:"frame spec: a JSON list of parts, each one of text/hex/int/copyFrom/repeat, e.g. [{\"text\":\"TICK\"}]"`
 }
 
+// CadenceControlIn is pause_cadence's and resume_cadence's input.
+type CadenceControlIn struct {
+	Space    string `json:"space,omitempty" jsonschema:"space/partition the endpoint belongs to; defaults to the server's default space"`
+	Endpoint string `json:"endpoint" jsonschema:"endpoint whose live connection's cadence is paused or resumed"`
+}
+
+// PausedOut reports whether the cadence is now paused.
+type PausedOut struct {
+	Paused bool `json:"paused"`
+}
+
 // DeletedOut reports a successful removal.
 type DeletedOut struct {
 	Deleted bool `json:"deleted"`
@@ -184,5 +195,36 @@ func registerStreamTools(s *sdkmcp.Server, deps Deps) {
 			return nil, EmittedOut{}, explainErr(err)
 		}
 		return nil, EmittedOut{Emitted: true}, nil
+	})
+
+	sdkmcp.AddTool(s, &sdkmcp.Tool{
+		Name: "pause_cadence",
+		Description: "Stop a byte-stream endpoint's cadence from emitting on its live connection, and return once " +
+			"every frame it already queued is on the wire. Injected frames still go out. Errors when nothing is " +
+			`connected or the endpoint has no cadence. Example: {"endpoint":"widget"}`,
+	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in CadenceControlIn) (*sdkmcp.CallToolResult, PausedOut, error) {
+		err := deps.CadencePause.Pause(ctx, usecase.CadencePauseInput{
+			Partition: resolveSpace(in.Space, deps.DefaultSpace),
+			Endpoint:  in.Endpoint,
+		})
+		if err != nil {
+			return nil, PausedOut{}, explainErr(err)
+		}
+		return nil, PausedOut{Paused: true}, nil
+	})
+
+	sdkmcp.AddTool(s, &sdkmcp.Tool{
+		Name: "resume_cadence",
+		Description: "Let a paused byte-stream endpoint's cadence emit again from its next tick, with whatever " +
+			`content currently wins. Example: {"endpoint":"widget"}`,
+	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in CadenceControlIn) (*sdkmcp.CallToolResult, PausedOut, error) {
+		err := deps.CadencePause.Resume(ctx, usecase.CadencePauseInput{
+			Partition: resolveSpace(in.Space, deps.DefaultSpace),
+			Endpoint:  in.Endpoint,
+		})
+		if err != nil {
+			return nil, PausedOut{}, explainErr(err)
+		}
+		return nil, PausedOut{Paused: false}, nil
 	})
 }

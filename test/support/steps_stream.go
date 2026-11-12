@@ -684,6 +684,27 @@ func (g *streamState) injectFrame(spec, endpoint string) error {
 	return nil
 }
 
+func (g *streamState) cadenceControl(op, endpoint string) error {
+	raw, err := json.Marshal(map[string]any{"endpoint": endpoint})
+	if err != nil {
+		return err
+	}
+	resp, err := g.post("/__lyrebird/stream/"+op, "default", raw)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("%s status %d, want 204", op, resp.StatusCode)
+	}
+	return nil
+}
+
+func (g *streamState) pauseCadence(endpoint string) error { return g.cadenceControl("pause", endpoint) }
+func (g *streamState) resumeCadence(endpoint string) error {
+	return g.cadenceControl("resume", endpoint)
+}
+
 func (g *streamState) injectionRejected() error {
 	if g.lastErr == nil {
 		return fmt.Errorf("injecting into an endpoint with no stand-in succeeded, want an explanatory error")
@@ -914,6 +935,8 @@ func RegisterStreamSteps(sc *godog.ScenarioContext, s *appState) {
 	sc.Step(`^the stand-in disconnects$`, g.standInDisconnects)
 
 	sc.Step(`^I inject the frame "(.*)" into endpoint "([^"]*)"$`, g.injectFrame)
+	sc.Step(`^I pause the cadence of endpoint "([^"]*)"$`, g.pauseCadence)
+	sc.Step(`^I resume the cadence of endpoint "([^"]*)"$`, g.resumeCadence)
 	sc.Step(`^the injection is rejected$`, g.injectionRejected)
 	sc.Step(`^the traffic log has an entry for "([^"]*)" with method "([^"]*)"$`, g.trafficHasEntryWithMethod)
 	sc.Step(`^the traffic log has an entry for "([^"]*)" with decision "([^"]*)"$`, g.trafficHasEntryWithDecision)

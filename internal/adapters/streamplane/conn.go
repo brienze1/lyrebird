@@ -43,6 +43,10 @@ type outbound struct {
 	// cadence marks a tick of the endpoint's own cadence, so its record can
 	// be bounded (recordOutbound) — never anything a scenario caused.
 	cadence bool
+	// barrier carries no bytes and is never written or recorded: writeLoop
+	// only reports it through result, which tells queueAndWait's caller that
+	// every frame queued before it has reached the wire (CB5-84 WI-04).
+	barrier bool
 	// result is how writeLoop reports this specific frame's write-and-record
 	// outcome back to queue, which sets it on every call — buffered by one so
 	// writeLoop's send can never block on it.
@@ -78,6 +82,14 @@ type conn struct {
 	// trim runs once every cadenceKeep of them rather than on every tick.
 	// Only the writer goroutine touches it.
 	cadenceRecorded int
+
+	// pauseMu guards paused/resumed and is held by runCadence from its
+	// paused-check through queue(), so once pauseCadence has set paused no
+	// further cadence frame can be queued (CB5-84 WI-04).
+	pauseMu sync.Mutex
+	paused  bool
+	// resumed is non-nil while paused; resumeCadence closes it.
+	resumed chan struct{}
 }
 
 func newConn(nc net.Conn, partition string, endpoint domain.Endpoint, hs handshake, h *Handler, reg *Registry, log *slog.Logger) *conn {
@@ -147,6 +159,12 @@ func (c *conn) writeLoop() {
 		case <-c.done:
 			return
 		case o := <-c.out:
+			if o.barrier {
+				if o.result != nil {
+					o.result <- nil
+				}
+				continue
+			}
 			var werr error
 			if len(o.bytes) > 0 {
 				if _, err := c.nc.Write(o.bytes); err != nil {
@@ -296,6 +314,29 @@ func (c *conn) emit(ctx context.Context, frameSpecJSON []byte) error {
 		// not_configured — the same label an unmatched inbound frame gets.
 		decision: domain.DecisionNotConfigured,
 	})
+}
+
+// pauseCadence stops this connection's cadence from queueing any further
+// frame and returns once everything queued before the pause is on the wire.
+func (c *conn) pauseCadence(ctx context.Context) error {
+	c.pauseMu.Lock()
+	if !c.paused {
+		c.paused = true
+		c.resumed = make(chan struct{})
+	}
+	c.pauseMu.Unlock()
+	return c.queueAndWait(ctx, outbound{barrier: true})
+}
+
+// resumeCadence lets a paused cadence emit again from its next iteration.
+func (c *conn) resumeCadence() {
+	c.pauseMu.Lock()
+	if c.paused {
+		c.paused = false
+		close(c.resumed)
+		c.resumed = nil
+	}
+	c.pauseMu.Unlock()
 }
 
 // close is idempotent and safe from any goroutine. It releases the

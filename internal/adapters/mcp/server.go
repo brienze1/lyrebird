@@ -80,6 +80,11 @@ type emitFramePort interface {
 	Execute(ctx context.Context, in usecase.EmitFrameInput) error
 }
 
+type cadencePausePort interface {
+	Pause(ctx context.Context, in usecase.CadencePauseInput) error
+	Resume(ctx context.Context, in usecase.CadencePauseInput) error
+}
+
 type exportSeedsPort interface {
 	Execute(ctx context.Context, partition string) (usecase.ExportBundle, error)
 }
@@ -116,6 +121,7 @@ type Deps struct {
 	ImportSeeds    importSeedsPort
 	Endpoints      endpointsPort
 	EmitFrame      emitFramePort
+	CadencePause   cadencePausePort
 
 	// GetMITMCACert is Deps' one deliberately-optional field: nil unless
 	// MITM is enabled (constitution Principle V), unlike every other field

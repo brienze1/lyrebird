@@ -51,6 +51,13 @@ import (
 // own Interval/Frames/OnExhaust stay exactly what they always were: an
 // override is content-only by default (WI-02 AC-3) and never mutates the
 // declaration itself.
+//
+// Pause gate (CB5-84 WI-04): after the pacing wait, and before anything is
+// resolved or built, the loop checks whether pauseCadence has been called and,
+// if so, parks on a channel until resumeCadence closes it (or the connection
+// ends). pauseMu is held from that check through queue(), so once
+// pauseCadence has set the flag no further cadence frame can be queued; a
+// paused goroutine is blocked, never spinning.
 func (c *conn) runCadence(ctx context.Context, declared *domain.Cadence) {
 	defer c.wg.Done()
 
@@ -115,6 +122,20 @@ func (c *conn) runCadence(ctx context.Context, declared *domain.Cadence) {
 			}
 		}
 
+		c.pauseMu.Lock()
+		if c.paused {
+			wait := c.resumed
+			c.pauseMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return
+			case <-c.done:
+				return
+			case <-wait:
+			}
+			continue
+		}
+
 		eff = c.resolveCadence(ctx, declared)
 		if eff.cadence.Interval < 0 || len(eff.cadence.Frames) == 0 {
 			// Same defensive guard as above, for an override whose content
@@ -122,6 +143,7 @@ func (c *conn) runCadence(ctx context.Context, declared *domain.Cadence) {
 			// rejects this — a hand-edited store row is the only way in).
 			c.log.Warn("streamplane: effective cadence has a negative interval or no frames, not started",
 				"endpoint", c.endpoint.Name)
+			c.pauseMu.Unlock()
 			return
 		}
 		if eff.identity != identity {
@@ -135,6 +157,7 @@ func (c *conn) runCadence(ctx context.Context, declared *domain.Cadence) {
 
 		parts, next, ok := cadenceFrameAt(eff.cadence, idx)
 		if !ok {
+			c.pauseMu.Unlock()
 			return // on_exhaustion: stop
 		}
 		idx = next
@@ -146,6 +169,7 @@ func (c *conn) runCadence(ctx context.Context, declared *domain.Cadence) {
 			// the stand-in to observe its peripheral being unplugged.
 			c.log.Warn("streamplane: cadence frame could not be built",
 				"endpoint", c.endpoint.Name, "err", err)
+			c.pauseMu.Unlock()
 			continue
 		}
 		// queue() blocks once the outbound channel is full, which — in
@@ -156,12 +180,14 @@ func (c *conn) runCadence(ctx context.Context, declared *domain.Cadence) {
 		// EMIT, decision mocked — whether or not an override is currently
 		// winning: overriding what a cadence emits changes the content, never
 		// the traffic shape (CB5-54 caution).
-		if err := c.queue(ctx, outbound{
+		err = c.queue(ctx, outbound{
 			bytes:     bytes,
 			direction: domain.StreamDirectionEmit,
 			decision:  domain.DecisionMocked,
 			cadence:   true,
-		}); err != nil {
+		})
+		c.pauseMu.Unlock()
+		if err != nil {
 			return
 		}
 	}

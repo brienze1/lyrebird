@@ -147,6 +147,22 @@ Feature: Generic byte-stream data plane
     When a stand-in connects to endpoint "seeded-ticker"
     Then the stand-in receives the frame "SEED"
 
+  Scenario: A paused cadence stops emitting, still carries injections, and resumes
+    Given a stream endpoint "ticker" delimited by CRLF emitting every "40ms":
+      """
+      ["[{\"text\":\"TICK\"}]"]
+      """
+    When a stand-in connects to endpoint "ticker"
+    Then the stand-in receives the frame "TICK"
+    When I pause the cadence of endpoint "ticker"
+    And I inject the frame "[{\"text\":\"ONE\"}]" into endpoint "ticker"
+    # A TICK written before the pause returned may precede ONE; nothing
+    # written after it can.
+    Then the stand-in eventually receives the frame "ONE"
+    And the stand-in receives nothing
+    When I resume the cadence of endpoint "ticker"
+    Then the stand-in eventually receives the frame "TICK"
+
   # CB5-11 correction round 1: mirrors cb5/gps reality exactly — a declared
   # 2ms/one-frame/repeat_last cadence carrying real inbound traffic (a
   # u-blox-style handshake answered by an ordinary, lower-priority respond

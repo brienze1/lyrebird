@@ -80,6 +80,39 @@ func (r *Registry) Emit(ctx context.Context, partition, endpoint string, frameSp
 	return c.emit(ctx, frameSpec)
 }
 
+// PauseCadence stops the cadence of the connection holding this endpoint from
+// queueing further frames, and returns once everything it had queued is on the
+// wire. It reports domain.ErrNotFound when nothing holds the endpoint.
+func (r *Registry) PauseCadence(ctx context.Context, partition, endpoint string) error {
+	c, err := r.lookup(partition, endpoint)
+	if err != nil {
+		return err
+	}
+	return c.pauseCadence(ctx)
+}
+
+// ResumeCadence lets a paused cadence emit again from its next iteration. It
+// reports domain.ErrNotFound when nothing holds the endpoint.
+func (r *Registry) ResumeCadence(_ context.Context, partition, endpoint string) error {
+	c, err := r.lookup(partition, endpoint)
+	if err != nil {
+		return err
+	}
+	c.resumeCadence()
+	return nil
+}
+
+func (r *Registry) lookup(partition, endpoint string) (*conn, error) {
+	r.mu.Lock()
+	c := r.conns[registryKey(partition, endpoint)]
+	r.mu.Unlock()
+	if c == nil {
+		return nil, fmt.Errorf("%w: no stand-in is connected to endpoint %q in space %q",
+			domain.ErrNotFound, endpoint, partition)
+	}
+	return c, nil
+}
+
 // CloseSpace stops every cadence and closes every connection in the
 // partition, so nothing survives a reset by being mid-stream (FR-031). The
 // stand-in observes exactly what it would observe if the peripheral were
